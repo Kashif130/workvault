@@ -321,18 +321,18 @@
 
 <script type="module">
 import { createClient, createAccount } from "https://esm.sh/genlayer-js@latest";
+import { studionet } from "https://esm.sh/genlayer-js@latest/chains";
 
 // ---------------------------------------------------------------------
 // Configuration — update CONTRACT_ADDRESS after each redeploy in Studio.
 // ---------------------------------------------------------------------
 const CONTRACT_ADDRESS = "0x93d7486FFD17C16f5242de822114C37E409C5eCD"; // DeliverableEscrow on GenLayer Studionet
 
-const STUDIO_CHAIN = {
-  id: 61999,
-  name: "GenLayer Studionet",
-  rpcUrls: { default: { http: ["https://studio.genlayer.com/api"] } },
-  nativeCurrency: { name: "GEN", symbol: "GEN", decimals: 18 },
-};
+// Use the SDK's own pre-built studionet chain object rather than a
+// hand-rolled one — genlayer-js's internals (built on Viem) expect a
+// specific shape, and a custom object missing fields caused write
+// transactions to fail with "Cannot convert undefined to a BigInt".
+const STUDIO_CHAIN = studionet;
 
 // Same network info, formatted for the MetaMask wallet_addEthereumChain /
 // wallet_switchEthereumChain RPC calls (hex chain id, EIP-3085 shape).
@@ -341,7 +341,7 @@ const STUDIO_CHAIN_PARAMS = {
   chainId: STUDIO_CHAIN_HEX,
   chainName: STUDIO_CHAIN.name,
   nativeCurrency: STUDIO_CHAIN.nativeCurrency,
-  rpcUrls: STUDIO_CHAIN.rpcUrls.default.http,
+  rpcUrls: STUDIO_CHAIN.rpcUrls?.default?.http || ["https://studio.genlayer.com/api"],
   blockExplorerUrls: ["https://explorer-studio.genlayer.com"],
 };
 
