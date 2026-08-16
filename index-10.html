@@ -1,0 +1,729 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>WorkVault — Escrow secured by GenLayer consensus</title>
+<style>
+  :root {
+    --bg: #0b0f0e;
+    --panel: #121917;
+    --panel-2: #182320;
+    --border: #24312d;
+    --text: #eaf2ee;
+    --muted: #8aa39a;
+    --accent: #4fd1a5;
+    --accent-2: #2fa87a;
+    --warn: #e0b04a;
+    --danger: #e2685f;
+    --radius: 14px;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: "Segoe UI", -apple-system, BlinkMacSystemFont, sans-serif;
+    background:
+      radial-gradient(1200px 600px at 80% -10%, #143329 0%, transparent 60%),
+      radial-gradient(900px 500px at -10% 110%, #12241f 0%, transparent 55%),
+      var(--bg);
+    color: var(--text);
+    min-height: 100vh;
+  }
+  header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 18px 24px;
+    border-bottom: 1px solid var(--border);
+    position: sticky;
+    top: 0;
+    background: rgba(11, 15, 14, 0.85);
+    backdrop-filter: blur(8px);
+    z-index: 10;
+  }
+  .brand { display: flex; align-items: center; gap: 10px; font-weight: 700; font-size: 1.15rem; letter-spacing: 0.2px; }
+  .brand .mark {
+    width: 30px; height: 30px; border-radius: 9px;
+    background: linear-gradient(135deg, var(--accent), #2a8f6f);
+    display: flex; align-items: center; justify-content: center;
+    font-weight: 900; color: #06120e;
+  }
+  .brand small { display: block; color: var(--muted); font-weight: 400; font-size: 0.7rem; }
+
+  nav { display: flex; gap: 4px; background: var(--panel); border: 1px solid var(--border); border-radius: 999px; padding: 4px; }
+  nav button {
+    background: transparent; border: none; color: var(--muted); padding: 8px 16px;
+    border-radius: 999px; cursor: pointer; font-size: 0.85rem; font-weight: 600; transition: all .15s;
+  }
+  nav button.active { background: var(--accent); color: #06120e; }
+  nav button:hover:not(.active) { color: var(--text); }
+
+  #wallet-area { display: flex; align-items: center; gap: 10px; }
+  #connect-btn {
+    background: var(--accent); color: #06120e; border: none; padding: 9px 18px;
+    border-radius: 10px; font-weight: 700; cursor: pointer; font-size: 0.85rem;
+  }
+  #connect-btn:hover { filter: brightness(1.08); }
+  #wallet-pill {
+    display: none; align-items: center; gap: 8px; background: var(--panel-2);
+    border: 1px solid var(--border); padding: 8px 14px; border-radius: 10px; font-size: 0.8rem; color: var(--muted);
+  }
+  #wallet-pill .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--accent); }
+  #wallet-pill b { color: var(--text); font-family: monospace; }
+
+  main { max-width: 920px; margin: 0 auto; padding: 32px 20px 80px; }
+  .view { display: none; animation: fadeIn .25s ease; }
+  .view.active { display: block; }
+  @keyframes fadeIn { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: translateY(0); } }
+
+  h1 { font-size: 1.6rem; margin: 0 0 6px; }
+  .sub { color: var(--muted); font-size: 0.92rem; margin: 0 0 26px; line-height: 1.5; }
+
+  .card {
+    background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius);
+    padding: 22px; margin-bottom: 16px;
+  }
+  .card h2 { margin: 0 0 14px; font-size: 1.05rem; }
+
+  label { display: block; font-size: 0.8rem; color: var(--muted); margin: 14px 0 6px; font-weight: 600; }
+  label:first-child { margin-top: 0; }
+  input[type="text"], input[type="number"], textarea {
+    width: 100%; background: var(--panel-2); border: 1px solid var(--border); color: var(--text);
+    padding: 11px 13px; border-radius: 10px; font-size: 0.9rem; font-family: inherit; resize: vertical;
+  }
+  textarea { min-height: 84px; }
+  input:focus, textarea:focus { outline: none; border-color: var(--accent); }
+  .row { display: flex; gap: 14px; }
+  .row > div { flex: 1; }
+  .checkbox-row { display: flex; align-items: center; gap: 10px; margin-top: 16px; }
+  .checkbox-row input { width: auto; }
+  .checkbox-row label { margin: 0; font-size: 0.85rem; color: var(--text); }
+  .hint { color: var(--muted); font-size: 0.76rem; margin-top: 6px; line-height: 1.4; }
+
+  .btn {
+    background: var(--accent); color: #06120e; border: none; padding: 12px 20px;
+    border-radius: 10px; font-weight: 700; cursor: pointer; font-size: 0.9rem; margin-top: 18px;
+  }
+  .btn:hover { filter: brightness(1.08); }
+  .btn:disabled { opacity: 0.5; cursor: not-allowed; }
+  .btn.secondary { background: var(--panel-2); color: var(--text); border: 1px solid var(--border); }
+  .btn.danger { background: var(--danger); color: #2a0908; }
+  .btn.small { padding: 8px 14px; font-size: 0.8rem; margin-top: 0; }
+
+  .status-msg { margin-top: 14px; padding: 12px 14px; border-radius: 10px; font-size: 0.83rem; display: none; line-height: 1.5; }
+  .status-msg.show { display: block; }
+  .status-msg.info { background: #12262133; border: 1px solid #2a4a3f; color: #cdeee1; }
+  .status-msg.error { background: #3a1613; border: 1px solid #5c2a24; color: #ffb3ac; }
+  .status-msg.success { background: #103322; border: 1px solid #1f5c3c; color: #b7f3d3; }
+
+  .escrow-list { display: flex; flex-direction: column; gap: 12px; }
+  .escrow-card {
+    background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius);
+    padding: 18px 20px; cursor: pointer; transition: border-color .15s;
+  }
+  .escrow-card:hover { border-color: var(--accent); }
+  .escrow-card-top { display: flex; justify-content: space-between; align-items: flex-start; gap: 10px; }
+  .escrow-card .eid { color: var(--muted); font-size: 0.75rem; font-family: monospace; }
+  .escrow-card .brief-text { margin: 6px 0 0; font-size: 0.95rem; }
+  .badge {
+    font-size: 0.72rem; font-weight: 700; padding: 4px 10px; border-radius: 999px;
+    white-space: nowrap; text-transform: uppercase; letter-spacing: 0.3px;
+  }
+  .badge.s0 { background: #2a3a2f; color: #a8d9c0; }
+  .badge.s1 { background: #2f3a55; color: #aec0f7; }
+  .badge.s2 { background: #1f5c3c; color: #b7f3d3; }
+  .badge.s3 { background: #5c2a24; color: #ffb3ac; }
+  .badge.s4 { background: #1c4a38; color: #8ff0c0; }
+  .badge.s5 { background: #4a3a1c; color: #f0d38f; }
+
+  .empty-state { text-align: center; padding: 60px 20px; color: var(--muted); }
+  .empty-state .big { font-size: 2rem; margin-bottom: 10px; }
+
+  .detail-header { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 18px; }
+  .back-link { color: var(--accent); background: none; border: none; cursor: pointer; font-size: 0.85rem; padding: 0; margin-bottom: 16px; font-weight: 600; }
+  .kv { display: flex; justify-content: space-between; padding: 10px 0; border-bottom: 1px solid var(--border); font-size: 0.87rem; }
+  .kv:last-child { border-bottom: none; }
+  .kv .k { color: var(--muted); }
+  .kv .v { text-align: right; max-width: 60%; word-break: break-word; }
+  .mono { font-family: monospace; font-size: 0.82rem; }
+
+  .reasoning-box {
+    background: var(--panel-2); border: 1px solid var(--border); border-radius: 10px;
+    padding: 14px 16px; font-size: 0.85rem; color: var(--muted); line-height: 1.5; margin-top: 8px;
+  }
+
+  .spinner {
+    display: inline-block; width: 14px; height: 14px; border: 2px solid rgba(255,255,255,0.25);
+    border-top-color: #06120e; border-radius: 50%; animation: spin .7s linear infinite; vertical-align: -2px; margin-right: 6px;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  footer { text-align: center; color: var(--muted); font-size: 0.75rem; padding: 30px 20px; border-top: 1px solid var(--border); margin-top: 40px; }
+  footer a { color: var(--accent); text-decoration: none; }
+
+  @media (max-width: 600px) {
+    header { padding: 14px 16px; flex-wrap: wrap; gap: 10px; }
+    nav { order: 3; width: 100%; justify-content: center; }
+    .row { flex-direction: column; gap: 0; }
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="brand">
+    <div class="mark">W</div>
+    <div>
+      WorkVault
+      <small>Escrow settled by GenLayer validator consensus</small>
+    </div>
+  </div>
+  <nav>
+    <button class="nav-btn active" data-view="browse">Browse</button>
+    <button class="nav-btn" data-view="create">Post a Job</button>
+    <button class="nav-btn" data-view="mine">My Escrows</button>
+  </nav>
+  <div id="wallet-area">
+    <button id="connect-btn">Connect Wallet</button>
+    <div id="wallet-pill"><span class="dot"></span><b id="wallet-addr-short"></b></div>
+  </div>
+</header>
+
+<main>
+
+  <!-- BROWSE VIEW -->
+  <section class="view active" id="view-browse">
+    <h1>Open &amp; Recent Escrows</h1>
+    <p class="sub">Every escrow on this board is held by the <strong>DeliverableEscrow</strong> Intelligent Contract. Funds only move when GenLayer validators independently agree a submission satisfies the stated criteria — no platform, no arbitrator.</p>
+    <div id="browse-list" class="escrow-list">
+      <div class="empty-state"><div class="big">🔍</div>Connect your wallet and load escrows to get started.</div>
+    </div>
+    <button class="btn secondary" id="refresh-browse" style="margin-top:16px;">Load / Refresh Escrows</button>
+  </section>
+
+  <!-- CREATE VIEW -->
+  <section class="view" id="view-create">
+    <h1>Post a Job &amp; Fund Escrow</h1>
+    <p class="sub">Deposit GEN into escrow now. Funds release automatically once validators confirm the delivered work meets your criteria — or come back to you if you enable refunds and the work never lands.</p>
+    <div class="card">
+      <h2>Job details</h2>
+      <label>Payee address <span style="color:var(--muted);font-weight:400;">(who will do the work)</span></label>
+      <input type="text" id="c-payee" placeholder="0x..." />
+
+      <label>Brief — what are you paying for?</label>
+      <textarea id="c-brief" placeholder="e.g. A 500-word blog post introducing GenLayer's consensus model, written for a general tech audience."></textarea>
+
+      <label>Acceptance criteria — how should validators judge it?</label>
+      <textarea id="c-criteria" placeholder="e.g. Approve if the linked post is at least 400 words, specifically explains GenLayer's Optimistic Democracy and Equivalence Principle, and isn't generic filler."></textarea>
+
+      <div class="row">
+        <div>
+          <label>Amount (GEN, in wei-equivalent smallest unit)</label>
+          <input type="number" id="c-amount" placeholder="1000" min="1" />
+          <div class="hint">This is the native value sent with the transaction and held in escrow.</div>
+        </div>
+      </div>
+
+      <div class="checkbox-row">
+        <input type="checkbox" id="c-refund" checked />
+        <label for="c-refund">Allow me to reclaim funds if the work is never approved</label>
+      </div>
+      <div class="hint">If unchecked, funds can only ever leave escrow through an approved submission — stronger guarantee for the payee, less flexible for you.</div>
+
+      <button class="btn" id="create-btn">Fund Escrow</button>
+      <div class="status-msg" id="create-status"></div>
+    </div>
+  </section>
+
+  <!-- MY ESCROWS VIEW -->
+  <section class="view" id="view-mine">
+    <h1>My Escrows</h1>
+    <p class="sub">Escrows where you're the payer or the payee. Submit work, trigger verification, or withdraw/refund from here.</p>
+    <div id="mine-list" class="escrow-list">
+      <div class="empty-state"><div class="big">👛</div>Connect your wallet to see escrows tied to your address.</div>
+    </div>
+    <button class="btn secondary" id="refresh-mine" style="margin-top:16px;">Refresh</button>
+  </section>
+
+  <!-- DETAIL VIEW -->
+  <section class="view" id="view-detail">
+    <button class="back-link" id="detail-back">&larr; Back</button>
+    <div class="card">
+      <div class="detail-header">
+        <div>
+          <div class="mono" style="color:var(--muted);" id="d-id"></div>
+          <h1 style="margin-top:4px;" id="d-brief-title">Escrow</h1>
+        </div>
+        <span class="badge" id="d-badge"></span>
+      </div>
+
+      <div class="kv"><span class="k">Payer</span><span class="v mono" id="d-payer"></span></div>
+      <div class="kv"><span class="k">Payee</span><span class="v mono" id="d-payee"></span></div>
+      <div class="kv"><span class="k">Amount</span><span class="v" id="d-amount"></span></div>
+      <div class="kv"><span class="k">Refunds enabled</span><span class="v" id="d-refund"></span></div>
+
+      <label style="margin-top:20px;">Brief</label>
+      <div class="reasoning-box" id="d-brief-full"></div>
+
+      <label>Acceptance criteria</label>
+      <div class="reasoning-box" id="d-criteria-full"></div>
+
+      <div id="d-submission-block" style="display:none;">
+        <label>Current submission</label>
+        <div class="reasoning-box" id="d-submission-text"></div>
+      </div>
+
+      <div id="d-reasoning-block" style="display:none;">
+        <label>Validator reasoning (last verification round)</label>
+        <div class="reasoning-box" id="d-reasoning-text"></div>
+      </div>
+    </div>
+
+    <!-- Action cards, shown conditionally by JS -->
+    <div class="card" id="d-submit-card" style="display:none;">
+      <h2>Submit your deliverable</h2>
+      <p class="hint" style="margin-bottom:10px;">You're the payee on this escrow. Describe or link your completed work.</p>
+      <textarea id="d-submission-input" placeholder="A description and/or URL to your completed work..."></textarea>
+      <button class="btn" id="d-submit-btn">Submit Deliverable</button>
+      <div class="status-msg" id="d-submit-status"></div>
+    </div>
+
+    <div class="card" id="d-verify-card" style="display:none;">
+      <h2>Trigger verification</h2>
+      <p class="hint" style="margin-bottom:10px;">GenLayer validators will independently review the submission against the brief and criteria, and reach consensus on a verdict.</p>
+      <button class="btn" id="d-verify-btn">Run Validator Consensus</button>
+      <div class="status-msg" id="d-verify-status"></div>
+    </div>
+
+    <div class="card" id="d-withdraw-card" style="display:none;">
+      <h2>Withdraw funds</h2>
+      <p class="hint" style="margin-bottom:10px;">Validators approved this submission. As the payee, you can now withdraw the escrowed amount.</p>
+      <button class="btn" id="d-withdraw-btn">Withdraw</button>
+      <div class="status-msg" id="d-withdraw-status"></div>
+    </div>
+
+    <div class="card" id="d-refund-card" style="display:none;">
+      <h2>Reclaim funds</h2>
+      <p class="hint" style="margin-bottom:10px;">This escrow allows refunds and hasn't been approved. As the payer, you can reclaim your funds at any time before approval.</p>
+      <button class="btn danger" id="d-refund-btn">Refund</button>
+      <div class="status-msg" id="d-refund-status"></div>
+    </div>
+  </section>
+
+</main>
+
+<footer>
+  WorkVault runs entirely against the <strong>DeliverableEscrow</strong> Intelligent Contract on GenLayer Studionet.
+  Payment release is decided by validator consensus, not by this website.
+  <br />
+  <a href="https://github.com/Kashif130/genlayer-deliverable-escrow" target="_blank">View contract source on GitHub</a>
+</footer>
+
+<script type="module">
+import { createClient, createAccount } from "https://esm.sh/genlayer-js@latest";
+
+// ---------------------------------------------------------------------
+// Configuration — update CONTRACT_ADDRESS after each redeploy in Studio.
+// ---------------------------------------------------------------------
+const CONTRACT_ADDRESS = "0x93d7486FFD17C16f5242de822114C37E409C5eCD"; // DeliverableEscrow on GenLayer Studionet
+
+const STUDIO_CHAIN = {
+  id: 61999,
+  name: "GenLayer Studionet",
+  rpcUrls: { default: { http: ["https://studio.genlayer.com/api"] } },
+  nativeCurrency: { name: "GEN", symbol: "GEN", decimals: 18 },
+};
+
+// Same network info, formatted for the MetaMask wallet_addEthereumChain /
+// wallet_switchEthereumChain RPC calls (hex chain id, EIP-3085 shape).
+const STUDIO_CHAIN_HEX = "0x" + STUDIO_CHAIN.id.toString(16); // 61999 -> 0xf22f
+const STUDIO_CHAIN_PARAMS = {
+  chainId: STUDIO_CHAIN_HEX,
+  chainName: STUDIO_CHAIN.name,
+  nativeCurrency: STUDIO_CHAIN.nativeCurrency,
+  rpcUrls: STUDIO_CHAIN.rpcUrls.default.http,
+  blockExplorerUrls: ["https://explorer-studio.genlayer.com"],
+};
+
+const STATUS_LABELS = ["FUNDED", "SUBMITTED", "APPROVED", "REJECTED", "RELEASED", "REFUNDED"];
+
+let client = null;
+let account = null;
+let currentAddress = null;
+
+// ---------------------------------------------------------------------
+// Network auto-switch: ensures the connected wallet is on GenLayer
+// Studionet before we try to read/write the contract. If the chain
+// isn't added to the wallet yet, wallet_addEthereumChain both adds and
+// switches to it in one prompt (per EIP-3085 / MetaMask behavior).
+// ---------------------------------------------------------------------
+async function ensureStudioNetwork() {
+  if (!window.ethereum) return; // SDK-managed account path doesn't need this
+  const currentChainId = await window.ethereum.request({ method: "eth_chainId" });
+  if (currentChainId?.toLowerCase() === STUDIO_CHAIN_HEX.toLowerCase()) return;
+
+  try {
+    await window.ethereum.request({
+      method: "wallet_switchEthereumChain",
+      params: [{ chainId: STUDIO_CHAIN_HEX }],
+    });
+  } catch (switchErr) {
+    // 4902 = chain not added to wallet yet
+    if (switchErr.code === 4902) {
+      await window.ethereum.request({
+        method: "wallet_addEthereumChain",
+        params: [STUDIO_CHAIN_PARAMS],
+      });
+    } else {
+      throw switchErr;
+    }
+  }
+}
+
+// ---------------------------------------------------------------------
+// Wallet connection
+// ---------------------------------------------------------------------
+async function connectWallet() {
+  try {
+    if (window.ethereum) {
+      await ensureStudioNetwork();
+      const accounts = await window.ethereum.request({ method: "eth_requestAccounts" });
+      currentAddress = accounts[0];
+      client = createClient({ chain: STUDIO_CHAIN, account: currentAddress });
+    } else {
+      // Fallback: SDK-managed local account, useful for quick testing
+      // without a browser wallet extension installed.
+      account = createAccount();
+      currentAddress = account.address;
+      client = createClient({ chain: STUDIO_CHAIN, account });
+    }
+    document.getElementById("connect-btn").style.display = "none";
+    const pill = document.getElementById("wallet-pill");
+    pill.style.display = "flex";
+    document.getElementById("wallet-addr-short").textContent =
+      currentAddress.slice(0, 6) + "…" + currentAddress.slice(-4);
+    refreshBrowse();
+  } catch (err) {
+    alert("Wallet connection failed: " + err.message);
+  }
+}
+
+document.getElementById("connect-btn").addEventListener("click", connectWallet);
+
+// Keep the app in sync if the user switches account or network manually
+// from within their wallet after already connecting.
+if (window.ethereum) {
+  window.ethereum.on?.("chainChanged", () => window.location.reload());
+  window.ethereum.on?.("accountsChanged", (accounts) => {
+    if (accounts.length === 0) {
+      window.location.reload();
+    } else {
+      currentAddress = accounts[0];
+      client = createClient({ chain: STUDIO_CHAIN, account: currentAddress });
+      document.getElementById("wallet-addr-short").textContent =
+        currentAddress.slice(0, 6) + "…" + currentAddress.slice(-4);
+      refreshBrowse();
+    }
+  });
+}
+
+// ---------------------------------------------------------------------
+// Navigation
+// ---------------------------------------------------------------------
+function showView(name) {
+  document.querySelectorAll(".view").forEach((v) => v.classList.remove("active"));
+  document.getElementById("view-" + name).classList.add("active");
+  document.querySelectorAll(".nav-btn").forEach((b) => b.classList.remove("active"));
+  const navBtn = document.querySelector(`.nav-btn[data-view="${name}"]`);
+  if (navBtn) navBtn.classList.add("active");
+}
+
+document.querySelectorAll(".nav-btn").forEach((btn) => {
+  btn.addEventListener("click", () => showView(btn.dataset.view));
+});
+
+// ---------------------------------------------------------------------
+// Contract read/write helpers
+// ---------------------------------------------------------------------
+async function readContract(functionName, args = []) {
+  if (!client) throw new Error("Connect your wallet first.");
+  return client.readContract({ address: CONTRACT_ADDRESS, functionName, args });
+}
+
+async function writeContract(functionName, args = [], value = 0) {
+  if (!client) throw new Error("Connect your wallet first.");
+  const txHash = await client.writeContract({
+    address: CONTRACT_ADDRESS,
+    functionName,
+    args,
+    value: BigInt(value),
+  });
+  const receipt = await client.waitForTransactionReceipt({
+    hash: txHash,
+    status: "FINALIZED",
+    retries: 100,
+    interval: 4000,
+  });
+  return receipt;
+}
+
+async function fetchEscrow(id) {
+  const [status, amount, submission, reasoning, payee, brief] = await Promise.all([
+    readContract("get_status", [id]),
+    readContract("get_amount", [id]),
+    readContract("get_submission", [id]),
+    readContract("get_verdict_reasoning", [id]),
+    readContract("get_payee", [id]),
+    readContract("get_brief", [id]),
+  ]);
+  return { id, status: Number(status), amount, submission, reasoning, payee, brief };
+}
+
+// ---------------------------------------------------------------------
+// Browse view
+// ---------------------------------------------------------------------
+async function refreshBrowse() {
+  const list = document.getElementById("browse-list");
+  if (!client) {
+    list.innerHTML = `<div class="empty-state"><div class="big">🔒</div>Connect your wallet to load escrows.</div>`;
+    return;
+  }
+  list.innerHTML = `<div class="empty-state"><span class="spinner" style="border-top-color:var(--accent);"></span>Loading escrows…</div>`;
+  try {
+    const count = Number(await readContract("escrow_count", []));
+    if (count === 0) {
+      list.innerHTML = `<div class="empty-state"><div class="big">📭</div>No escrows yet. Be the first to post a job.</div>`;
+      return;
+    }
+    const ids = Array.from({ length: count }, (_, i) => count - 1 - i); // newest first
+    const escrows = await Promise.all(ids.map(fetchEscrow));
+    renderEscrowList(list, escrows);
+  } catch (err) {
+    list.innerHTML = `<div class="empty-state">Failed to load escrows: ${err.message}</div>`;
+  }
+}
+
+function truncate(str, len) {
+  if (!str) return "";
+  return str.length > len ? str.slice(0, len) + "…" : str;
+}
+
+function escapeHtml(str) {
+  const div = document.createElement("div");
+  div.textContent = str;
+  return div.innerHTML;
+}
+
+function renderEscrowList(container, escrows) {
+  container.innerHTML = "";
+  escrows.forEach((e) => {
+    const card = document.createElement("div");
+    card.className = "escrow-card";
+    card.innerHTML = `
+      <div class="escrow-card-top">
+        <div>
+          <div class="eid">Escrow #${e.id}</div>
+          <div class="brief-text">${escapeHtml(truncate(e.brief, 90))}</div>
+          <div class="eid" style="margin-top:4px;">Payee: ${e.payee.slice(0, 8)}…${e.payee.slice(-6)} · Amount: ${e.amount}</div>
+        </div>
+        <span class="badge s${e.status}">${STATUS_LABELS[e.status]}</span>
+      </div>
+    `;
+    card.addEventListener("click", () => openDetail(e.id));
+    container.appendChild(card);
+  });
+}
+
+document.getElementById("refresh-browse").addEventListener("click", refreshBrowse);
+
+// ---------------------------------------------------------------------
+// My Escrows view (client-side filter by connected address)
+// ---------------------------------------------------------------------
+async function refreshMine() {
+  const list = document.getElementById("mine-list");
+  if (!client || !currentAddress) {
+    list.innerHTML = `<div class="empty-state"><div class="big">👛</div>Connect your wallet first.</div>`;
+    return;
+  }
+  list.innerHTML = `<div class="empty-state"><span class="spinner" style="border-top-color:var(--accent);"></span>Loading…</div>`;
+  try {
+    const count = Number(await readContract("escrow_count", []));
+    const ids = Array.from({ length: count }, (_, i) => i);
+    const escrows = await Promise.all(ids.map(fetchEscrow));
+    const mine = escrows.filter(
+      (e) => e.payee.toLowerCase() === currentAddress.toLowerCase()
+    );
+    if (mine.length === 0) {
+      list.innerHTML = `<div class="empty-state"><div class="big">📭</div>No escrows found for this address as payee.<br/><span style="font-size:0.78rem;">(Payer-side escrows are visible in Browse — this view filters by payee since the contract has no direct payer index.)</span></div>`;
+      return;
+    }
+    renderEscrowList(list, mine.reverse());
+  } catch (err) {
+    list.innerHTML = `<div class="empty-state">Failed to load: ${err.message}</div>`;
+  }
+}
+
+document.getElementById("refresh-mine").addEventListener("click", refreshMine);
+
+// ---------------------------------------------------------------------
+// Create escrow
+// ---------------------------------------------------------------------
+document.getElementById("create-btn").addEventListener("click", async () => {
+  const statusEl = document.getElementById("create-status");
+  const btn = document.getElementById("create-btn");
+  const payee = document.getElementById("c-payee").value.trim();
+  const brief = document.getElementById("c-brief").value.trim();
+  const criteria = document.getElementById("c-criteria").value.trim();
+  const amount = document.getElementById("c-amount").value.trim();
+  const refundEnabled = document.getElementById("c-refund").checked;
+
+  if (!client) return showStatus(statusEl, "error", "Connect your wallet first.");
+  if (!payee || !brief || !criteria || !amount || Number(amount) <= 0) {
+    return showStatus(statusEl, "error", "Fill in all fields with a positive amount.");
+  }
+
+  btn.disabled = true;
+  showStatus(statusEl, "info", '<span class="spinner"></span>Funding escrow — waiting for finalization…');
+  try {
+    await writeContract(
+      "create_escrow",
+      [payee, brief, criteria, refundEnabled],
+      Number(amount)
+    );
+    showStatus(statusEl, "success", "Escrow funded! Switch to Browse to see it.");
+    document.getElementById("c-payee").value = "";
+    document.getElementById("c-brief").value = "";
+    document.getElementById("c-criteria").value = "";
+    document.getElementById("c-amount").value = "";
+    refreshBrowse();
+  } catch (err) {
+    showStatus(statusEl, "error", "Failed: " + err.message);
+  } finally {
+    btn.disabled = false;
+  }
+});
+
+// ---------------------------------------------------------------------
+// Detail view
+// ---------------------------------------------------------------------
+let currentDetailId = null;
+
+async function openDetail(id) {
+  currentDetailId = id;
+  showView("detail");
+  await renderDetail(id);
+}
+
+async function renderDetail(id) {
+  const [status, amount, submission, reasoning, payee, brief, criteria, payer, refundEnabled] = await Promise.all([
+    readContract("get_status", [id]),
+    readContract("get_amount", [id]),
+    readContract("get_submission", [id]),
+    readContract("get_verdict_reasoning", [id]),
+    readContract("get_payee", [id]),
+    readContract("get_brief", [id]),
+    readContract("get_criteria", [id]),
+    readContract("get_payer", [id]),
+    readContract("get_refund_enabled", [id]),
+  ]);
+  const s = Number(status);
+
+  document.getElementById("d-id").textContent = "Escrow #" + id;
+  document.getElementById("d-brief-title").textContent = "Escrow #" + id;
+  document.getElementById("d-badge").textContent = STATUS_LABELS[s];
+  document.getElementById("d-badge").className = "badge s" + s;
+  document.getElementById("d-payer").textContent = payer;
+  document.getElementById("d-payee").textContent = payee;
+  document.getElementById("d-amount").textContent = amount.toString();
+  document.getElementById("d-refund").textContent = refundEnabled ? "Yes" : "No";
+  document.getElementById("d-brief-full").textContent = brief;
+  document.getElementById("d-criteria-full").textContent = criteria;
+
+  const subBlock = document.getElementById("d-submission-block");
+  if (submission) {
+    subBlock.style.display = "block";
+    document.getElementById("d-submission-text").textContent = submission;
+  } else {
+    subBlock.style.display = "none";
+  }
+
+  const reasonBlock = document.getElementById("d-reasoning-block");
+  if (reasoning) {
+    reasonBlock.style.display = "block";
+    document.getElementById("d-reasoning-text").textContent = reasoning;
+  } else {
+    reasonBlock.style.display = "none";
+  }
+
+  // Conditionally show action cards
+  const isPayee = currentAddress && payee.toLowerCase() === currentAddress.toLowerCase();
+
+  document.getElementById("d-submit-card").style.display =
+    isPayee && (s === 0 || s === 3) ? "block" : "none";
+  document.getElementById("d-verify-card").style.display = s === 1 ? "block" : "none";
+  document.getElementById("d-withdraw-card").style.display =
+    isPayee && s === 2 ? "block" : "none";
+  document.getElementById("d-refund-card").style.display =
+    refundEnabled && s !== 2 && s !== 4 && s !== 5 ? "block" : "none";
+}
+
+document.getElementById("detail-back").addEventListener("click", () => showView("browse"));
+
+document.getElementById("d-submit-btn").addEventListener("click", async () => {
+  const statusEl = document.getElementById("d-submit-status");
+  const text = document.getElementById("d-submission-input").value.trim();
+  if (!text) return showStatus(statusEl, "error", "Enter your submission first.");
+  showStatus(statusEl, "info", '<span class="spinner"></span>Submitting…');
+  try {
+    await writeContract("submit_deliverable", [currentDetailId, text]);
+    showStatus(statusEl, "success", "Submitted! Refreshing…");
+    await renderDetail(currentDetailId);
+  } catch (err) {
+    showStatus(statusEl, "error", "Failed: " + err.message);
+  }
+});
+
+document.getElementById("d-verify-btn").addEventListener("click", async () => {
+  const statusEl = document.getElementById("d-verify-status");
+  showStatus(statusEl, "info", '<span class="spinner"></span>Running validator consensus — this can take a minute…');
+  try {
+    await writeContract("verify_deliverable", [currentDetailId]);
+    showStatus(statusEl, "success", "Verification complete! Refreshing…");
+    await renderDetail(currentDetailId);
+  } catch (err) {
+    showStatus(statusEl, "error", "Failed: " + err.message);
+  }
+});
+
+document.getElementById("d-withdraw-btn").addEventListener("click", async () => {
+  const statusEl = document.getElementById("d-withdraw-status");
+  showStatus(statusEl, "info", '<span class="spinner"></span>Withdrawing…');
+  try {
+    await writeContract("withdraw", [currentDetailId]);
+    showStatus(statusEl, "success", "Funds withdrawn!");
+    await renderDetail(currentDetailId);
+  } catch (err) {
+    showStatus(statusEl, "error", "Failed: " + err.message);
+  }
+});
+
+document.getElementById("d-refund-btn").addEventListener("click", async () => {
+  const statusEl = document.getElementById("d-refund-status");
+  showStatus(statusEl, "info", '<span class="spinner"></span>Requesting refund…');
+  try {
+    await writeContract("refund", [currentDetailId]);
+    showStatus(statusEl, "success", "Refunded!");
+    await renderDetail(currentDetailId);
+  } catch (err) {
+    showStatus(statusEl, "error", "Failed: " + err.message);
+  }
+});
+
+function showStatus(el, kind, html) {
+  el.className = "status-msg show " + kind;
+  el.innerHTML = html;
+}
+</script>
+
+</body>
+</html>
