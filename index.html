@@ -135,6 +135,8 @@
   .badge.s3 { background: #5c2a24; color: #ffb3ac; }
   .badge.s4 { background: #1c4a38; color: #8ff0c0; }
   .badge.s5 { background: #4a3a1c; color: #f0d38f; }
+  .badge.s6 { background: #5c3a24; color: #ffcf9e; }
+  .badge.s7 { background: #33363c; color: #c3c8d4; }
 
   .empty-state { text-align: center; padding: 60px 20px; color: var(--muted); }
   .empty-state .big { font-size: 2rem; margin-bottom: 10px; }
@@ -204,7 +206,7 @@
   <!-- CREATE VIEW -->
   <section class="view" id="view-create">
     <h1>Post a Job &amp; Fund Escrow</h1>
-    <p class="sub">Deposit GEN into escrow now. Funds release automatically once validators confirm the delivered work meets your criteria — or come back to you if you enable refunds and the work never lands.</p>
+    <p class="sub">Deposit GEN into escrow now. Funds release automatically once validators confirm the delivered work meets your criteria — or come back to you if you enable refunds and the work never lands. <span id="c-fee-note"></span></p>
     <div class="card">
       <h2>Job details</h2>
       <label>Payee address <span style="color:var(--muted);font-weight:400;">(who will do the work)</span></label>
@@ -215,6 +217,7 @@
 
       <label>Acceptance criteria — how should validators judge it?</label>
       <textarea id="c-criteria" placeholder="e.g. Approve if the linked post is at least 400 words, specifically explains GenLayer's Optimistic Democracy and Equivalence Principle, and isn't generic filler."></textarea>
+      <div class="hint">Be specific — validators only check what's written here. For a blog post: state the exact topic, minimum word count, and that it must be original (not boilerplate/AI-generic/copied). Vague criteria get judged loosely; precise criteria get judged precisely.</div>
 
       <div class="row">
         <div>
@@ -230,6 +233,18 @@
       </div>
       <div class="hint">If unchecked, funds can only ever leave escrow through an approved submission — stronger guarantee for the payee, less flexible for you.</div>
 
+      <div id="c-refund-delay-wrap">
+        <label>Refund delay — how long should the payee get first?</label>
+        <select id="c-refund-delay">
+          <option value="0">Immediately (no delay)</option>
+          <option value="3600">1 hour</option>
+          <option value="86400" selected>24 hours</option>
+          <option value="259200">3 days</option>
+          <option value="604800">7 days</option>
+        </select>
+        <div class="hint">You won't be able to reclaim funds until this much time has passed since funding, even if refund is enabled above — gives the payee a fair window to submit work.</div>
+      </div>
+
       <button class="btn" id="create-btn">Fund Escrow</button>
       <div class="status-msg" id="create-status"></div>
     </div>
@@ -238,7 +253,7 @@
   <!-- MY ESCROWS VIEW -->
   <section class="view" id="view-mine">
     <h1>My Escrows</h1>
-    <p class="sub">Escrows where you're the payer or the payee. Submit work, trigger verification, or withdraw/refund from here.</p>
+    <p class="sub">Escrows where you're the payer or the payee. Submit work, trigger verification, withdraw, refund, cancel, or dispute from here.</p>
     <div id="mine-list" class="escrow-list">
       <div class="empty-state"><div class="big">👛</div>Connect your wallet to see escrows tied to your address.</div>
     </div>
@@ -260,7 +275,9 @@
       <div class="kv"><span class="k">Payer</span><span class="v mono" id="d-payer"></span></div>
       <div class="kv"><span class="k">Payee</span><span class="v mono" id="d-payee"></span></div>
       <div class="kv"><span class="k">Amount</span><span class="v" id="d-amount"></span></div>
+      <div class="kv" id="d-fee-row" style="display:none;"><span class="k">Platform fee</span><span class="v" id="d-fee"></span></div>
       <div class="kv"><span class="k">Refunds enabled</span><span class="v" id="d-refund"></span></div>
+      <div class="kv" id="d-refund-timing-row" style="display:none;"><span class="k">Refund unlocks</span><span class="v" id="d-refund-timing"></span></div>
 
       <label style="margin-top:20px;">Brief</label>
       <div class="reasoning-box" id="d-brief-full"></div>
@@ -282,8 +299,25 @@
     <!-- Action cards, shown conditionally by JS -->
     <div class="card" id="d-submit-card" style="display:none;">
       <h2>Submit your deliverable</h2>
-      <p class="hint" style="margin-bottom:10px;">You're the payee on this escrow. Describe or link your completed work.</p>
-      <textarea id="d-submission-input" placeholder="A description and/or URL to your completed work..."></textarea>
+      <p class="hint" style="margin-bottom:10px;">You're the payee on this escrow. Link your completed work and add any notes — validators will fetch the live page and judge it against the brief and criteria above, not just this description.</p>
+
+      <label>Deliverable URL</label>
+      <input type="text" id="d-submission-url" placeholder="https://yourblog.com/your-post" autocomplete="off" />
+      <div class="hint">Required if the criteria reference a link (e.g. a blog post). Validators fetch this page live at verification time.</div>
+
+      <label>Description / notes (optional)</label>
+      <textarea id="d-submission-desc" placeholder="Anything validators should know that isn't obvious from the link itself..."></textarea>
+
+      <button class="btn secondary small" id="d-preview-btn" type="button" style="margin-top:14px;">Preview &amp; check link</button>
+      <div id="d-preview-box" style="display:none; margin-top:12px; background: var(--panel-2); border: 1px solid var(--border); border-radius: 10px; padding: 14px;">
+        <div id="d-preview-status" class="hint" style="margin-top:0;"></div>
+        <div id="d-preview-stats" style="display:none; margin-top:8px; font-size:0.83rem; display:flex; gap:16px; flex-wrap:wrap;">
+          <span>Word count: <b id="d-preview-wordcount" style="color: var(--text);">–</b></span>
+          <span>Title: <b id="d-preview-title" style="color: var(--text);">–</b></span>
+        </div>
+        <div id="d-preview-text" class="reasoning-box" style="display:none; margin-top:10px; max-height:180px; overflow-y:auto; font-size:0.8rem; white-space:pre-wrap;"></div>
+      </div>
+
       <button class="btn" id="d-submit-btn">Submit Deliverable</button>
       <div class="status-msg" id="d-submit-status"></div>
     </div>
@@ -304,9 +338,47 @@
 
     <div class="card" id="d-refund-card" style="display:none;">
       <h2>Reclaim funds</h2>
-      <p class="hint" style="margin-bottom:10px;">This escrow allows refunds and hasn't been approved. As the payer, you can reclaim your funds at any time before approval.</p>
+      <p class="hint" style="margin-bottom:10px;" id="d-refund-hint">This escrow allows refunds and hasn't been approved. As the payer, you can reclaim your funds once the refund delay has elapsed.</p>
       <button class="btn danger" id="d-refund-btn">Refund</button>
       <div class="status-msg" id="d-refund-status"></div>
+    </div>
+
+    <div class="card" id="d-cancel-card" style="display:none;">
+      <h2>Cancel by mutual agreement</h2>
+      <p class="hint" style="margin-bottom:10px;" id="d-cancel-hint">Either party can propose cancelling. Once both the payer and payee have agreed, funds return to the payer automatically — no verdict needed.</p>
+      <div class="hint" style="margin-bottom:10px;">Payer agreed: <span id="d-cancel-payer-vote">—</span> · Payee agreed: <span id="d-cancel-payee-vote">—</span></div>
+      <button class="btn secondary" id="d-cancel-btn">Agree to Cancel</button>
+      <div class="status-msg" id="d-cancel-status"></div>
+    </div>
+
+    <div class="card" id="d-dispute-card" style="display:none;">
+      <h2>Raise a dispute</h2>
+      <p class="hint" style="margin-bottom:10px;">If you believe the automated verdict was wrong or the other party isn't cooperating, escalate to the contract's arbiter for a manual decision.</p>
+      <textarea id="d-dispute-reason" placeholder="Explain why you're disputing this escrow..."></textarea>
+      <button class="btn danger" id="d-dispute-btn">Raise Dispute</button>
+      <div class="status-msg" id="d-dispute-status"></div>
+    </div>
+
+    <div class="card" id="d-dispute-info-card" style="display:none;">
+      <h2>Dispute status</h2>
+      <div class="kv"><span class="k">Raised by</span><span class="v mono" id="d-disputed-by"></span></div>
+      <label>Reason</label>
+      <div class="reasoning-box" id="d-dispute-reason-text"></div>
+      <div id="d-dispute-resolution-block" style="display:none;">
+        <label>Arbiter's resolution note</label>
+        <div class="reasoning-box" id="d-dispute-resolution-text"></div>
+      </div>
+    </div>
+
+    <div class="card" id="d-arbiter-card" style="display:none;">
+      <h2>Resolve dispute (arbiter only)</h2>
+      <p class="hint" style="margin-bottom:10px;">You're the designated arbiter for this contract. Decide whether the payee should be paid or the payer refunded.</p>
+      <textarea id="d-resolution-note" placeholder="Explain your resolution..."></textarea>
+      <div class="row" style="margin-top:14px;">
+        <button class="btn" id="d-resolve-payee-btn">Release to Payee</button>
+        <button class="btn danger" id="d-resolve-payer-btn">Refund Payer</button>
+      </div>
+      <div class="status-msg" id="d-arbiter-status"></div>
     </div>
   </section>
 
@@ -345,7 +417,7 @@ const STUDIO_CHAIN_PARAMS = {
   blockExplorerUrls: ["https://explorer-studio.genlayer.com"],
 };
 
-const STATUS_LABELS = ["FUNDED", "SUBMITTED", "APPROVED", "REJECTED", "RELEASED", "REFUNDED"];
+const STATUS_LABELS = ["FUNDED", "SUBMITTED", "APPROVED", "REJECTED", "RELEASED", "REFUNDED", "DISPUTED", "CANCELLED"];
 
 let client = null;
 let account = null;
@@ -439,8 +511,24 @@ function showView(name) {
 }
 
 document.querySelectorAll(".nav-btn").forEach((btn) => {
-  btn.addEventListener("click", () => showView(btn.dataset.view));
+  btn.addEventListener("click", () => {
+    showView(btn.dataset.view);
+    if (btn.dataset.view === "create") loadCurrentFeeNote();
+  });
 });
+
+async function loadCurrentFeeNote() {
+  const el = document.getElementById("c-fee-note");
+  if (!client) { el.textContent = ""; return; }
+  try {
+    const feeBps = Number(await readContract("get_fee_bps", []));
+    el.textContent = feeBps > 0
+      ? `A ${(feeBps / 100)}% platform fee applies on successful release (deducted from the payee's payout, never from you).`
+      : "No platform fee is currently active.";
+  } catch (err) {
+    el.textContent = "";
+  }
+}
 
 // ---------------------------------------------------------------------
 // Contract read/write helpers
@@ -539,6 +627,13 @@ document.getElementById("refresh-browse").addEventListener("click", refreshBrows
 // ---------------------------------------------------------------------
 // My Escrows view (client-side filter by connected address)
 // ---------------------------------------------------------------------
+async function fetchIdsForAddress(getCountFn, getAtFn, address) {
+  const count = Number(await readContract(getCountFn, [address]));
+  const slots = Array.from({ length: count }, (_, i) => i);
+  const ids = await Promise.all(slots.map((slot) => readContract(getAtFn, [address, slot])));
+  return ids.map((id) => Number(id));
+}
+
 async function refreshMine() {
   const list = document.getElementById("mine-list");
   if (!client || !currentAddress) {
@@ -547,17 +642,18 @@ async function refreshMine() {
   }
   list.innerHTML = `<div class="empty-state"><span class="spinner" style="border-top-color:var(--accent);"></span>Loading…</div>`;
   try {
-    const count = Number(await readContract("escrow_count", []));
-    const ids = Array.from({ length: count }, (_, i) => i);
-    const escrows = await Promise.all(ids.map(fetchEscrow));
-    const mine = escrows.filter(
-      (e) => e.payee.toLowerCase() === currentAddress.toLowerCase()
-    );
-    if (mine.length === 0) {
-      list.innerHTML = `<div class="empty-state"><div class="big">📭</div>No escrows found for this address as payee.<br/><span style="font-size:0.78rem;">(Payer-side escrows are visible in Browse — this view filters by payee since the contract has no direct payer index.)</span></div>`;
+    const [payerIds, payeeIds] = await Promise.all([
+      fetchIdsForAddress("get_payer_escrow_count", "get_escrow_id_for_payer_at", currentAddress),
+      fetchIdsForAddress("get_payee_escrow_count", "get_escrow_id_for_payee_at", currentAddress),
+    ]);
+    const uniqueIds = Array.from(new Set([...payerIds, ...payeeIds]));
+    if (uniqueIds.length === 0) {
+      list.innerHTML = `<div class="empty-state"><div class="big">📭</div>No escrows found for this address as payer or payee.</div>`;
       return;
     }
-    renderEscrowList(list, mine.reverse());
+    const escrows = await Promise.all(uniqueIds.map(fetchEscrow));
+    escrows.sort((a, b) => b.id - a.id); // newest first
+    renderEscrowList(list, escrows);
   } catch (err) {
     list.innerHTML = `<div class="empty-state">Failed to load: ${err.message}</div>`;
   }
@@ -568,6 +664,10 @@ document.getElementById("refresh-mine").addEventListener("click", refreshMine);
 // ---------------------------------------------------------------------
 // Create escrow
 // ---------------------------------------------------------------------
+document.getElementById("c-refund").addEventListener("change", (e) => {
+  document.getElementById("c-refund-delay-wrap").style.display = e.target.checked ? "block" : "none";
+});
+
 document.getElementById("create-btn").addEventListener("click", async () => {
   const statusEl = document.getElementById("create-status");
   const btn = document.getElementById("create-btn");
@@ -576,6 +676,7 @@ document.getElementById("create-btn").addEventListener("click", async () => {
   const criteria = document.getElementById("c-criteria").value.trim();
   const amount = document.getElementById("c-amount").value.trim();
   const refundEnabled = document.getElementById("c-refund").checked;
+  const refundDelaySeconds = Number(document.getElementById("c-refund-delay").value);
 
   if (!client) return showStatus(statusEl, "error", "Connect your wallet first.");
   if (!payee || !brief || !criteria || !amount || Number(amount) <= 0) {
@@ -587,7 +688,7 @@ document.getElementById("create-btn").addEventListener("click", async () => {
   try {
     await writeContract(
       "create_escrow",
-      [payee, brief, criteria, refundEnabled],
+      [payee, brief, criteria, refundEnabled, refundDelaySeconds],
       Number(amount)
     );
     showStatus(statusEl, "success", "Escrow funded! Switch to Browse to see it.");
@@ -615,7 +716,12 @@ async function openDetail(id) {
 }
 
 async function renderDetail(id) {
-  const [status, amount, submission, reasoning, payee, brief, criteria, payer, refundEnabled] = await Promise.all([
+  const [
+    status, amount, submission, reasoning, payee, brief, criteria, payer,
+    refundEnabled, refundAvailableAt, feeBpsAtCreation,
+    payerCancelVote, payeeCancelVote,
+    disputedBy, disputeReason, disputeResolutionNote, arbiter,
+  ] = await Promise.all([
     readContract("get_status", [id]),
     readContract("get_amount", [id]),
     readContract("get_submission", [id]),
@@ -625,8 +731,19 @@ async function renderDetail(id) {
     readContract("get_criteria", [id]),
     readContract("get_payer", [id]),
     readContract("get_refund_enabled", [id]),
+    readContract("get_refund_available_at", [id]),
+    readContract("get_fee_bps_at_creation", [id]),
+    readContract("get_payer_cancel_vote", [id]),
+    readContract("get_payee_cancel_vote", [id]),
+    readContract("get_disputed_by", [id]),
+    readContract("get_dispute_reason", [id]),
+    readContract("get_dispute_resolution_note", [id]),
+    readContract("get_arbiter", []),
   ]);
   const s = Number(status);
+  const refundUnlockMs = Number(refundAvailableAt) * 1000;
+  const refundUnlocked = Date.now() >= refundUnlockMs;
+  const feeBps = Number(feeBpsAtCreation);
 
   document.getElementById("d-id").textContent = "Escrow #" + id;
   document.getElementById("d-brief-title").textContent = "Escrow #" + id;
@@ -638,6 +755,25 @@ async function renderDetail(id) {
   document.getElementById("d-refund").textContent = refundEnabled ? "Yes" : "No";
   document.getElementById("d-brief-full").textContent = brief;
   document.getElementById("d-criteria-full").textContent = criteria;
+
+  const feeRow = document.getElementById("d-fee-row");
+  if (feeBps > 0) {
+    feeRow.style.display = "flex";
+    const feeAmount = (BigInt(amount) * BigInt(feeBps)) / 10000n;
+    document.getElementById("d-fee").textContent =
+      (feeBps / 100) + "% (" + feeAmount.toString() + " on release, payee receives the rest)";
+  } else {
+    feeRow.style.display = "none";
+  }
+
+  const timingRow = document.getElementById("d-refund-timing-row");
+  if (refundEnabled) {
+    timingRow.style.display = "flex";
+    document.getElementById("d-refund-timing").textContent =
+      refundUnlocked ? "Available now" : "Available " + new Date(refundUnlockMs).toLocaleString();
+  } else {
+    timingRow.style.display = "none";
+  }
 
   const subBlock = document.getElementById("d-submission-block");
   if (submission) {
@@ -656,27 +792,159 @@ async function renderDetail(id) {
   }
 
   // Conditionally show action cards
+  const isPayer = currentAddress && payer.toLowerCase() === currentAddress.toLowerCase();
   const isPayee = currentAddress && payee.toLowerCase() === currentAddress.toLowerCase();
+  const isArbiter = currentAddress && arbiter.toLowerCase() === currentAddress.toLowerCase();
+  const isParty = isPayer || isPayee;
+  const settled = (s === 4 || s === 5 || s === 6 || s === 7); // RELEASED/REFUNDED/DISPUTED/CANCELLED
 
   document.getElementById("d-submit-card").style.display =
     isPayee && (s === 0 || s === 3) ? "block" : "none";
   document.getElementById("d-verify-card").style.display = s === 1 ? "block" : "none";
   document.getElementById("d-withdraw-card").style.display =
     isPayee && s === 2 ? "block" : "none";
-  document.getElementById("d-refund-card").style.display =
-    refundEnabled && s !== 2 && s !== 4 && s !== 5 ? "block" : "none";
+
+  const refundCard = document.getElementById("d-refund-card");
+  const refundEligibleStatus = refundEnabled && s !== 2 && s !== 4 && s !== 5 && s !== 6 && s !== 7;
+  refundCard.style.display = (isPayer && refundEligibleStatus) ? "block" : "none";
+  if (refundEligibleStatus) {
+    document.getElementById("d-refund-btn").disabled = !refundUnlocked;
+    document.getElementById("d-refund-hint").textContent = refundUnlocked
+      ? "The refund delay has elapsed. As the payer, you can reclaim your funds now."
+      : "This escrow allows refunds, but the delay hasn't elapsed yet — available " + new Date(refundUnlockMs).toLocaleString() + ".";
+  }
+
+  // Mutual cancel — available to either party before APPROVED and before settlement
+  const cancelCard = document.getElementById("d-cancel-card");
+  const cancelEligible = isParty && (s === 0 || s === 1 || s === 3);
+  cancelCard.style.display = cancelEligible ? "block" : "none";
+  if (cancelEligible) {
+    document.getElementById("d-cancel-payer-vote").textContent = payerCancelVote ? "Yes" : "No";
+    document.getElementById("d-cancel-payee-vote").textContent = payeeCancelVote ? "Yes" : "No";
+    const alreadyVoted = (isPayer && payerCancelVote) || (isPayee && payeeCancelVote);
+    document.getElementById("d-cancel-btn").disabled = alreadyVoted;
+    document.getElementById("d-cancel-btn").textContent = alreadyVoted ? "Waiting on the other party…" : "Agree to Cancel";
+  }
+
+  // Dispute — either party can raise once a submission exists and it's not settled
+  const disputeCard = document.getElementById("d-dispute-card");
+  const disputeEligible = isParty && (s === 1 || s === 2 || s === 3);
+  disputeCard.style.display = disputeEligible ? "block" : "none";
+
+  // Dispute info block — shown whenever a dispute has ever been raised
+  const disputeInfoCard = document.getElementById("d-dispute-info-card");
+  if (disputedBy) {
+    disputeInfoCard.style.display = "block";
+    document.getElementById("d-disputed-by").textContent = disputedBy;
+    document.getElementById("d-dispute-reason-text").textContent = disputeReason;
+    const resBlock = document.getElementById("d-dispute-resolution-block");
+    if (disputeResolutionNote) {
+      resBlock.style.display = "block";
+      document.getElementById("d-dispute-resolution-text").textContent = disputeResolutionNote;
+    } else {
+      resBlock.style.display = "none";
+    }
+  } else {
+    disputeInfoCard.style.display = "none";
+  }
+
+  // Arbiter resolution card
+  document.getElementById("d-arbiter-card").style.display =
+    (isArbiter && s === 6) ? "block" : "none";
 }
 
 document.getElementById("detail-back").addEventListener("click", () => showView("browse"));
 
+// Best-effort client-side fetch of a submitted URL, purely so the payee can
+// preview roughly what a validator will see before submitting on-chain.
+// This is a convenience check only — it does NOT affect verification.
+// The real, authoritative check happens on-chain inside verify_deliverable(),
+// where each validator independently calls gl.nondet.web.render(url) at
+// verification time and judges the live page against the brief + criteria.
+// Most sites block direct cross-origin fetches from a browser, so this uses
+// a public read-only text-extraction proxy and fails gracefully if blocked.
+async function fetchUrlPreview(url) {
+  const proxied = "https://r.jina.ai/" + url;
+  const res = await fetch(proxied, { method: "GET" });
+  if (!res.ok) throw new Error("Fetch failed (HTTP " + res.status + ")");
+  const text = await res.text();
+  if (!text || text.trim().length === 0) throw new Error("Empty response");
+  return text;
+}
+
+function countWords(text) {
+  const stripped = text.trim().replace(/\s+/g, " ");
+  if (!stripped) return 0;
+  return stripped.split(" ").length;
+}
+
+document.getElementById("d-preview-btn").addEventListener("click", async () => {
+  const urlInput = document.getElementById("d-submission-url").value.trim();
+  const box = document.getElementById("d-preview-box");
+  const statusEl = document.getElementById("d-preview-status");
+  const statsEl = document.getElementById("d-preview-stats");
+  const wcEl = document.getElementById("d-preview-wordcount");
+  const titleEl = document.getElementById("d-preview-title");
+  const textEl = document.getElementById("d-preview-text");
+
+  box.style.display = "block";
+  statsEl.style.display = "none";
+  textEl.style.display = "none";
+
+  if (!urlInput) {
+    statusEl.textContent = "Enter a URL above first, then preview it here.";
+    return;
+  }
+  let url;
+  try {
+    url = new URL(urlInput);
+  } catch {
+    statusEl.textContent = "That doesn't look like a valid URL (include https://).";
+    return;
+  }
+
+  statusEl.innerHTML = '<span class="spinner"></span>Fetching live page content…';
+  try {
+    const content = await fetchUrlPreview(url.href);
+    const words = countWords(content);
+    const firstLine = content.split("\n").map(l => l.trim()).find(l => l.length > 0) || "(no title detected)";
+
+    wcEl.textContent = words.toLocaleString();
+    titleEl.textContent = firstLine.slice(0, 80);
+    statsEl.style.display = "flex";
+    textEl.textContent = content.slice(0, 2000) + (content.length > 2000 ? "…" : "");
+    textEl.style.display = "block";
+    statusEl.textContent = "This is roughly what validators will see when they fetch this link. Check it matches your topic, word count, and originality requirements in the criteria above before submitting.";
+  } catch (err) {
+    statusEl.textContent = "Couldn't preview this link in-browser (" + err.message + "). This doesn't block submission — validators fetch it independently on-chain regardless. Just double check the URL is correct and public.";
+  }
+});
+
 document.getElementById("d-submit-btn").addEventListener("click", async () => {
   const statusEl = document.getElementById("d-submit-status");
-  const text = document.getElementById("d-submission-input").value.trim();
-  if (!text) return showStatus(statusEl, "error", "Enter your submission first.");
+  const url = document.getElementById("d-submission-url").value.trim();
+  const desc = document.getElementById("d-submission-desc").value.trim();
+
+  if (!url && !desc) {
+    return showStatus(statusEl, "error", "Add a deliverable URL and/or a description first.");
+  }
+  if (url) {
+    try { new URL(url); }
+    catch { return showStatus(statusEl, "error", "That URL looks invalid — include https://"); }
+  }
+
+  // Combine into the single submission string the contract expects.
+  // The contract regex-extracts the first https?:// URL from this text
+  // and has validators fetch it live, so the URL must appear verbatim.
+  const text = [url, desc].filter(Boolean).join("\n\n");
+
   showStatus(statusEl, "info", '<span class="spinner"></span>Submitting…');
   try {
     await writeContract("submit_deliverable", [currentDetailId, text]);
-    showStatus(statusEl, "success", "Submitted! Refreshing…");
+    showStatus(statusEl, "success", "Submitted! Validators will verify the live link content, not just your description. Refreshing…");
+    document.getElementById("d-submission-url").value = "";
+    document.getElementById("d-submission-desc").value = "";
+    document.getElementById("d-preview-box").style.display = "none";
     await renderDetail(currentDetailId);
   } catch (err) {
     showStatus(statusEl, "error", "Failed: " + err.message);
@@ -713,6 +981,61 @@ document.getElementById("d-refund-btn").addEventListener("click", async () => {
   try {
     await writeContract("refund", [currentDetailId]);
     showStatus(statusEl, "success", "Refunded!");
+    await renderDetail(currentDetailId);
+  } catch (err) {
+    showStatus(statusEl, "error", "Failed: " + err.message);
+  }
+});
+
+document.getElementById("d-cancel-btn").addEventListener("click", async () => {
+  const statusEl = document.getElementById("d-cancel-status");
+  showStatus(statusEl, "info", '<span class="spinner"></span>Recording your agreement to cancel…');
+  try {
+    await writeContract("propose_cancel", [currentDetailId]);
+    showStatus(statusEl, "success", "Recorded. If the other party has also agreed, this escrow is now cancelled.");
+    await renderDetail(currentDetailId);
+  } catch (err) {
+    showStatus(statusEl, "error", "Failed: " + err.message);
+  }
+});
+
+document.getElementById("d-dispute-btn").addEventListener("click", async () => {
+  const statusEl = document.getElementById("d-dispute-status");
+  const reason = document.getElementById("d-dispute-reason").value.trim();
+  if (!reason) return showStatus(statusEl, "error", "Explain your reason for disputing first.");
+  showStatus(statusEl, "info", '<span class="spinner"></span>Raising dispute…');
+  try {
+    await writeContract("raise_dispute", [currentDetailId, reason]);
+    showStatus(statusEl, "success", "Dispute raised. The contract's arbiter will review and resolve it.");
+    document.getElementById("d-dispute-reason").value = "";
+    await renderDetail(currentDetailId);
+  } catch (err) {
+    showStatus(statusEl, "error", "Failed: " + err.message);
+  }
+});
+
+document.getElementById("d-resolve-payee-btn").addEventListener("click", async () => {
+  const statusEl = document.getElementById("d-arbiter-status");
+  const note = document.getElementById("d-resolution-note").value.trim();
+  if (!note) return showStatus(statusEl, "error", "Add a resolution note explaining your decision.");
+  showStatus(statusEl, "info", '<span class="spinner"></span>Releasing funds to payee…');
+  try {
+    await writeContract("resolve_dispute", [currentDetailId, true, note]);
+    showStatus(statusEl, "success", "Dispute resolved — funds released to the payee.");
+    await renderDetail(currentDetailId);
+  } catch (err) {
+    showStatus(statusEl, "error", "Failed: " + err.message);
+  }
+});
+
+document.getElementById("d-resolve-payer-btn").addEventListener("click", async () => {
+  const statusEl = document.getElementById("d-arbiter-status");
+  const note = document.getElementById("d-resolution-note").value.trim();
+  if (!note) return showStatus(statusEl, "error", "Add a resolution note explaining your decision.");
+  showStatus(statusEl, "info", '<span class="spinner"></span>Refunding payer…');
+  try {
+    await writeContract("resolve_dispute", [currentDetailId, false, note]);
+    showStatus(statusEl, "success", "Dispute resolved — funds refunded to the payer.");
     await renderDetail(currentDetailId);
   } catch (err) {
     showStatus(statusEl, "error", "Failed: " + err.message);
