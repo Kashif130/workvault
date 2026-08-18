@@ -1,88 +1,85 @@
 # WorkVault
 
-**Escrow secured by GenLayer validator consensus.**
+Escrow that releases funds only when GenLayer validators independently agree a submitted deliverable satisfies the acceptance criteria the payer wrote down — not a manual "approve/reject" button on trust.
 
-WorkVault is a freelance/bounty escrow dApp built on [GenLayer](https://genlayer.com). Instead of a human arbitrator or an off-chain dispute process deciding whether a deliverable meets the brief, WorkVault uses GenLayer's Intelligent Contracts to have validators independently judge the submission against stated acceptance criteria — and reach consensus on-chain.
-
-🔗 **Live app:** [kashif130.github.io/workvault](https://kashif130.github.io/workvault/)
+**Live app:** https://kashif130.github.io/workvault/
+**Contract (GenLayer Studionet):** `0x50b8B474762c2ab941B6C132e1dcC08672E375D5`
+**Contract source:** https://github.com/Kashif130/workvault/tree/main/contracts
 
 ---
 
-## Why
+## What problem this solves
 
-"Did the freelancer actually deliver what was agreed?" is normally a manual, trust-based, or off-chain-arbitrated question. It can't be checked with a simple deterministic rule (a file exists, a hash matches) — it needs actual reading and judgment: does this report cover the brief, does this code satisfy the spec, was this design delivered as described.
+Freelance/bounty escrow is usually one of two bad options:
 
-WorkVault turns that judgment call into an on-chain decision made by GenLayer validator consensus, using a **non-comparative equivalence principle**: validators don't need to produce identical wording, they just need to independently reach the same verdict category given the same brief and criteria.
+- **A human "release funds" button** — the payer just has to trust the payee's word, or a platform arbitrator has to manually read every submission.
+- **A fully deterministic on-chain check** — works for "does this hash match," not for "is this actually a good 500-word blog post about X."
 
-## How it works
+WorkVault uses GenLayer's non-deterministic validator consensus instead. The payer writes acceptance criteria in plain English (topic, minimum word count, must be original, etc.). When the payee submits a deliverable — typically a URL — validators **independently fetch the live page** (`gl.nondet.web.render`) and judge the actual content against the stated criteria, then reconcile their verdicts through an equivalence principle (they don't need identical wording, just the same verdict category). Funds only move on that consensus result.
 
-1. **Fund an escrow** — the payer deposits funds, names a payee, and writes a brief (what's being delivered) and acceptance criteria (how it should be judged).
-2. **Submit a deliverable** — the payee submits proof of work: a description and/or a link to the actual deliverable.
-3. **Verify** — anyone can trigger verification. Validators independently review the brief, criteria, and submission via an LLM prompt, and return a verdict: `APPROVED`, `REJECTED`, or `NEEDS_REVISION`, plus reasoning.
-4. **Settle**
-   - If `APPROVED` → the payee can **withdraw** funds.
-   - If `REJECTED` / `NEEDS_REVISION` → the payee can revise and resubmit, or — if the payer enabled refunds at creation — the payer can **reclaim** funds at any point before approval.
+## Lifecycle
 
 ```
-FUNDED → SUBMITTED → APPROVED → RELEASED
-            ↑            ↓
-            └── REJECTED ┘
-                  ↓ (if refund_enabled)
-               REFUNDED
+FUNDED → SUBMITTED → APPROVED → RELEASED   (payee withdraws)
+                    → REJECTED → (resubmit) or → REFUNDED (after delay, if enabled)
+         SUBMITTED  → DISPUTED → RELEASED | REFUNDED   (arbiter decides)
+FUNDED | SUBMITTED             → CANCELLED             (both parties agree)
 ```
 
-This keeps "judge the work" (LLM consensus, re-runnable) separate from "move the money" (a single, guarded withdraw path) — the standard escrow safety pattern, applied to a subjective/judged deliverable instead of a deterministic condition.
+1. **Payer** creates an escrow: deposits funds, names a payee, writes a `brief` (what's being paid for) and `criteria` (how to judge it), optionally enables a timed refund window.
+2. **Payee** submits a deliverable — a URL and/or description.
+3. **Anyone** triggers `verify_deliverable`. If the submission contains a URL, each validator fetches it live and judges the real content — not just the payee's description — against the brief and criteria. Verdict: `APPROVED`, `REJECTED`, or `NEEDS_REVISION`, plus a reasoning sentence.
+4. **Approved** → payee withdraws (minus platform fee, if any). **Rejected** → payee can revise and resubmit, or payer can refund after the delay (if enabled).
+5. Either party can **raise a dispute** at any point after submission, escalating to the contract's arbiter for a manual override — an escape hatch for cases consensus can't cleanly settle.
+6. Either party can **propose cancellation**; once both agree, funds return to the payer with no verdict needed.
 
-## Repo contents
+## Why the verification is trustworthy
 
-| File | Description |
+- Validators don't trust the payee's typed description alone — they fetch the actual live URL content and judge against that.
+- Vague criteria get judged loosely; specific criteria (exact topic, minimum word count, "must be original, not boilerplate") get judged precisely. The create-job form nudges payers to be specific.
+- Verdicts are reconciled by a non-comparative equivalence principle across validators, not a single model's opinion.
+- Every verdict is required to come with a reasoning sentence (minimum 10 words) — not just a bare APPROVED/REJECTED — so a rejection is always explainable, not a black box.
+- `get_last_raw_response` exposes the last unparsed validator output for debugging if a verdict ever looks wrong.
+
+## Frontend features
+
+- **Browse / Post a Job / My Escrows** views.
+- **Create escrow**: payee address, brief, acceptance criteria (with guidance on being specific), amount, optional refund window.
+- **Submit deliverable**: separate URL field + optional description, so the link is always captured cleanly for the on-chain fetch.
+  - **Preview & check link**: best-effort client-side fetch of the URL before submitting, showing word count and a content preview — a convenience check only. The authoritative check always happens on-chain when a validator independently fetches the URL at verification time.
+- **Verify**: one click triggers validator consensus; shows the verdict and reasoning once resolved.
+- **Withdraw / Refund / Propose cancel / Raise dispute / Resolve dispute** (arbiter-only) actions, shown conditionally based on escrow state and connected wallet role.
+
+## Contract functions
+
+| Category | Function |
 |---|---|
-| `contracts/deliverable_escrow.py` | The GenLayer Intelligent Contract — `DeliverableEscrow` |
-| `index.html` | Single-page frontend: Browse / Post a Job / My Escrows / Escrow detail |
+| Lifecycle | `create_escrow`, `submit_deliverable`, `verify_deliverable`, `withdraw`, `refund` |
+| Dispute / cancel | `raise_dispute`, `resolve_dispute` (arbiter-only), `propose_cancel` |
+| Admin | `set_fee_bps`, `set_treasury`, `set_arbiter`, `transfer_ownership`, `set_paused` |
+| Views | `get_status`, `get_amount`, `get_brief`, `get_criteria`, `get_submission`, `get_verdict_reasoning`, `get_payer`, `get_payee`, `get_refund_enabled`, `get_created_at`, `get_refund_available_at`, `get_submit_count`, `get_last_raw_response`, `get_fee_bps_at_creation`, `get_payer_cancel_vote`, `get_payee_cancel_vote`, `get_disputed_by`, `get_dispute_reason`, `get_dispute_resolution_note`, `get_fee_bps`, `get_treasury`, `get_owner`, `get_arbiter`, `get_paused`, `escrow_count`, `get_payer_escrow_count` / `get_escrow_id_for_payer_at`, `get_payee_escrow_count` / `get_escrow_id_for_payee_at` |
 
-## The Intelligent Contract
+## Platform fee
 
-Built with [`genlayer`](https://docs.genlayer.com) (py-genlayer), targeting GenVM.
+Optional, basis-points fee (default 0, hard-capped at 1000 bps / 10%) deducted from the payee's release **only on a successful approved withdraw** — never on refunds, cancellations, or arbiter-ordered refunds. The rate is locked in per-escrow at funding time, so a later fee change never retroactively affects escrows already in flight.
 
-**State per escrow:** payer, payee, amount, brief, criteria, submission, status, verdict reasoning, submit count, refund flag, and the last raw validator response (for debugging parse issues).
+## Files
 
-**Public methods**
+| File | Purpose |
+|---|---|
+| `deliverable_escrow.py` | The Intelligent Contract (GenLayer, Python) — all escrow logic and validator verification. |
+| `workvault-index.html` | Single-file frontend — wallet connect, create/browse/manage escrows, deliverable submission with URL preview. |
+| `test_deliverable_escrow.py` | Contract test suite. |
 
-| Method | Caller | Description |
-|---|---|---|
-| `create_escrow(payee, brief, criteria, refund_enabled)` | payer | Payable — funds a new escrow |
-| `submit_deliverable(escrow_id, submission)` | payee | Submits/resubmits proof of work |
-| `verify_deliverable(escrow_id)` | anyone | Triggers validator consensus judgment |
-| `withdraw(escrow_id)` | payee | Claims funds after `APPROVED` |
-| `refund(escrow_id)` | payer | Reclaims funds if never approved (requires `refund_enabled`) |
-| `get_status` / `get_amount` / `get_submission` / `get_verdict_reasoning` / `get_brief` / `get_criteria` / `get_payer` / `get_payee` / `get_refund_enabled` / `get_last_raw_response` / `escrow_count` | — | Views |
+## Local testing checklist
 
-**Consensus step:** `verify_deliverable` calls `gl.eq_principle.prompt_non_comparative`, which prompts each validator with the brief, criteria, and submission, and asks for a two-line response (verdict word + one-sentence reasoning). Equivalence between validators is judged only on verdict category, not exact wording. The raw response is parsed defensively by keyword scan (not strict JSON), since the pinned model doesn't reliably return structured output.
+1. **Create** an escrow as the payer: fund it, write a specific brief + criteria (topic, min word count, must be original).
+2. **Submit** as the payee: paste a real URL, use "Preview & check link" to sanity-check word count/content before submitting on-chain.
+3. **Verify**: trigger validator consensus, confirm the verdict and that the reasoning box shows an actual explanation (not just the verdict word repeated).
+4. **Withdraw** (if approved) or **resubmit** (if rejected) — confirm state transitions and, if a fee is set, that the payee receives amount minus fee.
+5. Optionally exercise **refund** (after the delay), **propose_cancel** (both parties agree), and **raise_dispute → resolve_dispute** (arbiter override) paths.
 
-## The frontend
+## Notes
 
-A single-file vanilla HTML/CSS/JS dApp — no build step.
-
-- **Browse** — lists all escrows on the contract.
-- **Post a Job** — form to fund a new escrow (payee, brief, criteria, amount, refund toggle).
-- **My Escrows** — escrows where the connected wallet is the payee.
-- **Detail view** — shows full escrow state, and conditionally shows action cards (submit / verify / withdraw / refund) based on the connected wallet's role and the escrow's current status.
-
-## Running locally
-
-The frontend is static — no build tooling required.
-
-```bash
-git clone https://github.com/kashif130/workvault.git
-cd workvault
-# serve index.html with any static server, e.g.:
-python3 -m http.server 8080
-```
-
-Then open `http://localhost:8080` and connect a wallet configured for the GenLayer network the contract is deployed to.
-
-Deploying the contract itself requires the GenLayer CLI/Studio — see the [GenLayer docs](https://docs.genlayer.com) for deployment steps.
-
-## License
-
-MIT
+- Deployed on **GenLayer Studionet** — a testnet. Update `CONTRACT_ADDRESS` in `workvault-index.html` after every redeploy.
+- The client-side link preview uses a public read-only proxy and is best-effort only; some sites will block it. This never blocks submission and has no bearing on the actual on-chain verdict.
