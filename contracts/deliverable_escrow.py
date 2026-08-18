@@ -104,6 +104,14 @@ v0.3.0: platform fee (owner-configurable, capped, charged only on
         state-changing calls; input hardening (zero-address checks,
         string length caps, fee/arbiter bounds); CANCELLED and DISPUTED
         statuses added to the lifecycle.
+v0.3.1: strengthened the verdict prompt to require a mandatory,
+        minimum-10-word explanation line (with a worked example) since
+        the model would sometimes return only the bare verdict word;
+        verify_deliverable now also detects when the parsed reasoning
+        is just the verdict word repeated back (e.g. reasoning
+        "REJECTED") and replaces it with an explicit "no explanation
+        was returned" message instead of silently showing the verdict
+        word again as if it were a reason.
 """
 
 from genlayer import *
@@ -467,10 +475,17 @@ class DeliverableEscrow(gl.Contract):
                     f"{fetched_content}\n\n"
                 )
             prompt += (
-                "Respond in exactly two lines, nothing else:\n"
+                "Respond in EXACTLY two lines — both lines are mandatory, "
+                "never omit line 2:\n"
                 "Line 1: one word — APPROVED, REJECTED, or NEEDS_REVISION\n"
-                "Line 2: one short sentence explaining why, citing the "
-                "specific criteria that were or were not met"
+                "Line 2: a mandatory explanation sentence, minimum 10 words, "
+                "citing the specific criteria that were or were not met. "
+                "Never leave line 2 blank and never repeat the verdict word "
+                "as the explanation.\n\n"
+                "Example of the exact format expected:\n"
+                "REJECTED\n"
+                "The submission is only 210 words, below the required 300-word "
+                "minimum, and does not mention the Equivalence Principle at all."
             )
             return gl.nondet.exec_prompt(prompt)
 
@@ -512,6 +527,17 @@ class DeliverableEscrow(gl.Contract):
             reasoning = raw.strip()
         if not reasoning:
             reasoning = "No reasoning text returned by validator."
+        # If the model only ever returned the bare verdict word (no actual
+        # explanation sentence), surface that plainly instead of silently
+        # repeating "APPROVED"/"REJECTED" as if it were a reason — that
+        # would look like a reason was given when none actually was.
+        if reasoning.strip().upper().replace(" ", "_") in (
+            "APPROVED", "REJECTED", "NEEDS_REVISION"
+        ):
+            reasoning = (
+                "Validator did not return an explanation for this verdict "
+                "(only the verdict word was returned)."
+            )
 
         if verdict not in ("APPROVED", "REJECTED", "NEEDS_REVISION"):
             verdict = "NEEDS_REVISION"
