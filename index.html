@@ -278,6 +278,8 @@
       <div class="kv" id="d-fee-row" style="display:none;"><span class="k">Platform fee</span><span class="v" id="d-fee"></span></div>
       <div class="kv"><span class="k">Refunds enabled</span><span class="v" id="d-refund"></span></div>
       <div class="kv" id="d-refund-timing-row" style="display:none;"><span class="k">Refund unlocks</span><span class="v" id="d-refund-timing"></span></div>
+      <div class="kv"><span class="k">Created</span><span class="v" id="d-created-at"></span></div>
+      <div class="kv" id="d-submit-count-row" style="display:none;"><span class="k">Submissions made</span><span class="v" id="d-submit-count"></span></div>
 
       <label style="margin-top:20px;">Brief</label>
       <div class="reasoning-box" id="d-brief-full"></div>
@@ -293,6 +295,8 @@
       <div id="d-reasoning-block" style="display:none;">
         <label>Validator reasoning (last verification round)</label>
         <div class="reasoning-box" id="d-reasoning-text"></div>
+        <button class="btn secondary small" id="d-raw-toggle-btn" type="button" style="margin-top:10px;">Show raw validator output</button>
+        <div class="reasoning-box" id="d-raw-response-text" style="display:none; margin-top:10px; font-size:0.78rem; white-space:pre-wrap;"></div>
       </div>
     </div>
 
@@ -721,6 +725,7 @@ async function renderDetail(id) {
     refundEnabled, refundAvailableAt, feeBpsAtCreation,
     payerCancelVote, payeeCancelVote,
     disputedBy, disputeReason, disputeResolutionNote, arbiter,
+    createdAt, submitCount, lastRawResponse,
   ] = await Promise.all([
     readContract("get_status", [id]),
     readContract("get_amount", [id]),
@@ -739,11 +744,18 @@ async function renderDetail(id) {
     readContract("get_dispute_reason", [id]),
     readContract("get_dispute_resolution_note", [id]),
     readContract("get_arbiter", []),
+    readContract("get_created_at", [id]),
+    readContract("get_submit_count", [id]),
+    readContract("get_last_raw_response", [id]),
   ]);
   const s = Number(status);
   const refundUnlockMs = Number(refundAvailableAt) * 1000;
   const refundUnlocked = Date.now() >= refundUnlockMs;
   const feeBps = Number(feeBpsAtCreation);
+  // createdAt/refundAvailableAt are both Unix seconds on-chain (see
+  // Escrow.created_at / refund_available_at in the contract) — always
+  // multiply by 1000 before handing to Date, consistently, everywhere.
+  const createdAtMs = Number(createdAt) * 1000;
 
   document.getElementById("d-id").textContent = "Escrow #" + id;
   document.getElementById("d-brief-title").textContent = "Escrow #" + id;
@@ -755,6 +767,17 @@ async function renderDetail(id) {
   document.getElementById("d-refund").textContent = refundEnabled ? "Yes" : "No";
   document.getElementById("d-brief-full").textContent = brief;
   document.getElementById("d-criteria-full").textContent = criteria;
+  document.getElementById("d-created-at").textContent = new Date(createdAtMs).toLocaleString();
+
+  const submitCountNum = Number(submitCount);
+  const submitCountRow = document.getElementById("d-submit-count-row");
+  if (submitCountNum > 0) {
+    submitCountRow.style.display = "flex";
+    document.getElementById("d-submit-count").textContent =
+      submitCountNum + (submitCountNum === 1 ? " submission" : " submissions");
+  } else {
+    submitCountRow.style.display = "none";
+  }
 
   const feeRow = document.getElementById("d-fee-row");
   if (feeBps > 0) {
@@ -787,6 +810,8 @@ async function renderDetail(id) {
   if (reasoning) {
     reasonBlock.style.display = "block";
     document.getElementById("d-reasoning-text").textContent = reasoning;
+    document.getElementById("d-raw-response-text").textContent =
+      lastRawResponse || "(no raw response stored)";
   } else {
     reasonBlock.style.display = "none";
   }
@@ -854,6 +879,14 @@ async function renderDetail(id) {
 }
 
 document.getElementById("detail-back").addEventListener("click", () => showView("browse"));
+
+document.getElementById("d-raw-toggle-btn").addEventListener("click", () => {
+  const box = document.getElementById("d-raw-response-text");
+  const btn = document.getElementById("d-raw-toggle-btn");
+  const showing = box.style.display !== "none";
+  box.style.display = showing ? "none" : "block";
+  btn.textContent = showing ? "Show raw validator output" : "Hide raw validator output";
+});
 
 // Best-effort client-side fetch of a submitted URL, purely so the payee can
 // preview roughly what a validator will see before submitting on-chain.
