@@ -63,13 +63,17 @@ FUNDED | SUBMITTED             → CANCELLED             (both parties agree)
 
 Optional, basis-points fee (default 0, hard-capped at 1000 bps / 10%) deducted from the payee's release **only on a successful approved withdraw** — never on refunds, cancellations, or arbiter-ordered refunds. The rate is locked in per-escrow at funding time, so a later fee change never retroactively affects escrows already in flight.
 
+## Timestamps
+
+`created_at` and `refund_available_at` are stored on-chain as **Unix seconds** (via `datetime.datetime.now().timestamp()` in `create_escrow`). The frontend consistently converts these to JS milliseconds (`Number(value) * 1000`) before constructing a `Date` — every place a timestamp is read and displayed follows this same conversion, so refund-availability and creation-time never drift relative to each other.
+
 ## Files
 
 | File | Purpose |
 |---|---|
 | `deliverable_escrow.py` | The Intelligent Contract (GenLayer, Python) — all escrow logic and validator verification. |
 | `workvault-index.html` | Single-file frontend — wallet connect, create/browse/manage escrows, deliverable submission with URL preview. |
-| `test_deliverable_escrow.py` | Contract test suite. |
+| `test_deliverable_escrow.py` | Contract test suite covering create, browse/detail reads, submission, verification, withdrawal, and timed refund against the submitted contract. |
 
 ## Local testing checklist
 
