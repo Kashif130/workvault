@@ -112,12 +112,32 @@ v0.3.1: strengthened the verdict prompt to require a mandatory,
         "REJECTED") and replaces it with an explicit "no explanation
         was returned" message instead of silently showing the verdict
         word again as if it were a reason.
+v0.3.2: verdict parsing now tries a JSON parse first (the model
+        sometimes returns {"verdict": ..., "reasoning": ...} instead of
+        the requested two plain lines, and JSON parsing gives an exact
+        reasoning string with no stray braces/quotes/escapes leaking
+        into on-chain data), falling back to the existing keyword-scan
+        + line-split parsing for the plain-text shape.
+v0.3.3: gl.nondet.web.render() returns the raw text of the entire
+        fetched page — nav bars, menus, "sign in" links, sidebars,
+        related-post lists, footers — mixed in with the actual article,
+        which could pollute word-count and topic judgment (a
+        content-heavy nav on a short article could previously pad an
+        under-length submission past a word-count criterion, or bury
+        the real topic under menu text). The verify prompt now
+        explicitly instructs the validator to first isolate the actual
+        article/blog-post body from surrounding page furniture and
+        judge word count and criteria against that isolated body only,
+        never the raw page text. Fetch cap raised 6000->8000 chars
+        since page furniture eats into the budget before reaching the
+        real content on nav-heavy sites.
 """
 
 from genlayer import *
 from dataclasses import dataclass
 import datetime
 import re
+import json
 
 
 # ---------------------------------------------------------------------------
@@ -451,7 +471,7 @@ class DeliverableEscrow(gl.Contract):
             if url_match:
                 url = url_match.group(0).rstrip(".,;)\"'")
                 try:
-                    fetched_content = gl.nondet.web.render(url, mode="text")[:6000]
+                    fetched_content = gl.nondet.web.render(url, mode="text")[:8000]
                 except Exception as fetch_err:
                     fetched_content = (
                         f"[Could not fetch the linked URL ({url}): {fetch_err}. "
@@ -469,9 +489,26 @@ class DeliverableEscrow(gl.Contract):
             if fetched_content:
                 prompt += (
                     "LIVE CONTENT FETCHED FROM THE SUBMITTED LINK (this is "
-                    "the actual current content at that URL right now — "
-                    "judge the real deliverable against this, not just the "
-                    "payee's description above):\n"
+                    "the raw text of the entire page as fetched right now — "
+                    "it includes real page furniture mixed in with the "
+                    "actual article: navigation bars, menu items, category "
+                    "lists, \"sign in\"/\"switch to dark mode\" links, ads, "
+                    "cookie notices, author bios, related-articles lists, "
+                    "comments, and footer links. Before judging anything, "
+                    "you MUST first mentally isolate the actual blog "
+                    "post / article body from this page furniture — this is "
+                    "usually the contiguous block of prose starting at the "
+                    "article's headline and ending before a "
+                    "related-posts/comments/footer section begins. "
+                    "Judge the brief and acceptance criteria (including any "
+                    "word-count requirement) ONLY against that isolated "
+                    "article body. Do NOT count navigation links, menu "
+                    "items, sidebar lists, or footer text toward any word "
+                    "count, and do NOT let site-chrome text influence "
+                    "whether the submission satisfies the criteria — a page "
+                    "with heavy navigation but a short article body must "
+                    "still be judged on the short article body alone, not "
+                    "on the total page length):\n"
                     f"{fetched_content}\n\n"
                 )
             prompt += (
@@ -479,13 +516,15 @@ class DeliverableEscrow(gl.Contract):
                 "never omit line 2:\n"
                 "Line 1: one word — APPROVED, REJECTED, or NEEDS_REVISION\n"
                 "Line 2: a mandatory explanation sentence, minimum 10 words, "
-                "citing the specific criteria that were or were not met. "
+                "citing the specific criteria that were or were not met, "
+                "based on the isolated article body (not the full page). "
                 "Never leave line 2 blank and never repeat the verdict word "
                 "as the explanation.\n\n"
                 "Example of the exact format expected:\n"
                 "REJECTED\n"
-                "The submission is only 210 words, below the required 300-word "
-                "minimum, and does not mention the Equivalence Principle at all."
+                "The article body is only 210 words, below the required "
+                "300-word minimum, and does not mention the Equivalence "
+                "Principle at all."
             )
             return gl.nondet.exec_prompt(prompt)
 
@@ -503,28 +542,59 @@ class DeliverableEscrow(gl.Contract):
 
         e.last_raw_response = raw[:800]
 
-        # Keyword-based extraction instead of strict JSON parsing: this
-        # pinned GenVM/model combination does not reliably return
-        # structured JSON even when explicitly instructed to, so we parse
-        # defensively by scanning for the verdict keyword instead of
-        # depending on an exact machine-readable shape.
-        upper = raw.upper()
-        if "NEEDS_REVISION" in upper or "NEEDS REVISION" in upper:
-            verdict = "NEEDS_REVISION"
-        elif "APPROVED" in upper:
-            verdict = "APPROVED"
-        elif "REJECTED" in upper:
-            verdict = "REJECTED"
-        else:
-            verdict = "NEEDS_REVISION"
+        # The pinned GenVM/model combination is inconsistent about output
+        # shape despite the prompt asking for two plain lines — it
+        # sometimes returns a JSON object like
+        #   {"verdict": "REJECTED", "reasoning": "..."}
+        # instead. Try a JSON parse first (cleanest, gives an exact
+        # reasoning string with no stray braces/quotes); fall back to
+        # keyword-scanning + line-splitting for the plain-text shape.
+        verdict = None
+        reasoning = None
 
-        # Reasoning: everything after the first line (the verdict word),
-        # falling back to the full raw response if there's no second line.
-        lines = raw.strip().splitlines()
-        if len(lines) > 1:
-            reasoning = " ".join(line.strip() for line in lines[1:] if line.strip())
-        else:
-            reasoning = raw.strip()
+        stripped_raw = raw.strip()
+        json_candidate = stripped_raw
+        # Handle the model wrapping JSON in a ```json ... ``` fence.
+        if json_candidate.startswith("```"):
+            json_candidate = json_candidate.strip("`")
+            if json_candidate.lower().startswith("json"):
+                json_candidate = json_candidate[4:]
+            json_candidate = json_candidate.strip()
+
+        if json_candidate.startswith("{"):
+            try:
+                parsed = json.loads(json_candidate)
+                v = str(parsed.get("verdict", "")).strip().upper().replace(" ", "_")
+                if v in ("APPROVED", "REJECTED", "NEEDS_REVISION"):
+                    verdict = v
+                r = parsed.get("reasoning", "")
+                if isinstance(r, str) and r.strip():
+                    reasoning = r.strip()
+            except (ValueError, AttributeError):
+                pass  # not valid JSON — fall through to keyword scanning
+
+        if verdict is None:
+            # Keyword-based extraction: scan for the verdict keyword instead
+            # of depending on an exact machine-readable shape.
+            upper = stripped_raw.upper()
+            if "NEEDS_REVISION" in upper or "NEEDS REVISION" in upper:
+                verdict = "NEEDS_REVISION"
+            elif "APPROVED" in upper:
+                verdict = "APPROVED"
+            elif "REJECTED" in upper:
+                verdict = "REJECTED"
+            else:
+                verdict = "NEEDS_REVISION"
+
+        if reasoning is None:
+            # Reasoning: everything after the first line (the verdict
+            # word), falling back to the full raw response if there's no
+            # second line.
+            lines = stripped_raw.splitlines()
+            if len(lines) > 1:
+                reasoning = " ".join(line.strip() for line in lines[1:] if line.strip())
+            else:
+                reasoning = stripped_raw
         if not reasoning:
             reasoning = "No reasoning text returned by validator."
         # If the model only ever returned the bare verdict word (no actual
