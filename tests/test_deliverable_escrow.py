@@ -17,8 +17,7 @@ are integration tests, not offline unit tests, since the contract's
 core behavior (verify_deliverable) depends on live validator consensus.
 
 Coverage:
-  - create_escrow, all getters              -> test_create_and_read,
-                                                test_getter_reconciliation
+  - create_escrow, all getters              -> test_create_and_read
   - submit_deliverable                      -> test_submit_and_verify
   - verify_deliverable                      -> test_submit_and_verify
   - withdraw (+ fee deduction)              -> test_approve_and_withdraw_end_to_end,
@@ -33,12 +32,16 @@ Coverage:
                                                 test_pause_blocks_state_changes,
                                                 test_transfer_ownership
   - payer/payee indexes                     -> test_payer_payee_index
+  - verdict parsing regressions             -> test_verdict_parser_does_not_misread_mixed_rejection_text,
+                                                test_verdict_parser_rejects_conflicting_plain_text,
+                                                test_verdict_parser_accepts_json_with_verdict_words_in_reasoning
   - input hardening                         -> test_create_rejects_empty_funding,
                                                 test_create_rejects_self_payee,
                                                 test_create_rejects_zero_address_payee
 """
 
 import time
+import json
 
 import pytest
 from gltest import get_contract_factory, get_default_account, create_account
@@ -472,4 +475,139 @@ def test_transfer_ownership(contract, payer):
 
     # cannot transfer to the zero address
     assert tx_execution_failed(
-        contract.transfer_ownership(args=[ZERO_ADDRESS]).transact
+        contract.transfer_ownership(args=[ZERO_ADDRESS]).transact(account=owner)
+    )
+
+    # owner can transfer ownership
+    assert tx_execution_succeeded(
+        contract.transfer_ownership(args=[str(new_owner.address)]).transact(account=owner)
+    )
+    assert contract.get_owner().call().lower() == str(new_owner.address).lower()
+
+    # old owner no longer has admin rights; new owner does
+    assert tx_execution_failed(
+        contract.set_paused(args=[True]).transact(account=owner)
+    )
+    assert tx_execution_succeeded(
+        contract.set_paused(args=[True]).transact(account=new_owner)
+    )
+    assert contract.get_paused().call() is True
+
+
+# ---------------------------------------------------------------------
+# 9. Emergency pause
+# ---------------------------------------------------------------------
+def test_pause_blocks_state_changes(contract, payer, payee):
+    # Pause is an owner action and should block all contract state changes.
+    assert tx_execution_succeeded(
+        contract.set_paused(args=[True]).transact(account=payer)
+    )
+    assert contract.get_paused().call() is True
+
+    create_tx = contract.create_escrow(
+        args=[str(payee.address), BRIEF, CRITERIA, True, 0],
+        value=1000,
+    ).transact(account=payer)
+    assert tx_execution_failed(create_tx)
+    assert contract.escrow_count().call() == 0
+
+    # Views remain available while paused.
+    assert contract.get_paused().call() is True
+
+    assert tx_execution_succeeded(
+        contract.set_paused(args=[False]).transact(account=payer)
+    )
+    assert contract.get_paused().call() is False
+
+
+# ---------------------------------------------------------------------
+# 10. Payer/payee pagination indexes
+# ---------------------------------------------------------------------
+def test_payer_payee_index(contract, payer, payee):
+    other_payee = create_account()
+
+    contract.create_escrow(
+        args=[str(payee.address), BRIEF, CRITERIA, True, 0],
+        value=1000,
+    ).transact(account=payer)
+    contract.create_escrow(
+        args=[str(payee.address), BRIEF, CRITERIA, True, 0],
+        value=1000,
+    ).transact(account=payer)
+    contract.create_escrow(
+        args=[str(other_payee.address), BRIEF, CRITERIA, True, 0],
+        value=1000,
+    ).transact(account=payer)
+
+    assert contract.get_payer_escrow_count(args=[str(payer.address)]).call() == 3
+    assert contract.get_escrow_id_for_payer_at(
+        args=[str(payer.address), 0]
+    ).call() == 0
+    assert contract.get_escrow_id_for_payer_at(
+        args=[str(payer.address), 1]
+    ).call() == 1
+    assert contract.get_escrow_id_for_payer_at(
+        args=[str(payer.address), 2]
+    ).call() == 2
+
+    assert contract.get_payee_escrow_count(args=[str(payee.address)]).call() == 2
+    assert contract.get_escrow_id_for_payee_at(
+        args=[str(payee.address), 0]
+    ).call() == 0
+    assert contract.get_escrow_id_for_payee_at(
+        args=[str(payee.address), 1]
+    ).call() == 1
+
+    assert contract.get_payee_escrow_count(args=[str(other_payee.address)]).call() == 1
+    assert contract.get_escrow_id_for_payee_at(
+        args=[str(other_payee.address), 0]
+    ).call() == 2
+
+    # Out-of-range slots must fail instead of returning a fabricated id.
+    with pytest.raises(Exception):
+        contract.get_escrow_id_for_payer_at(
+            args=[str(payer.address), 3]
+        ).call()
+
+
+# ---------------------------------------------------------------------
+# 11. Verdict-parser regression tests
+# ---------------------------------------------------------------------
+def test_verdict_parser_does_not_misread_mixed_rejection_text():
+    from contracts.deliverable_escrow import parse_verdict_response
+
+    raw = (
+        "REJECTED\n"
+        "The submission is rejected because it fails the criteria. "
+        "It would be approved only if the missing validator evidence were added."
+    )
+    verdict, reasoning = parse_verdict_response(raw)
+
+    assert verdict == "REJECTED"
+    assert "approved only if" in reasoning.lower()
+
+
+def test_verdict_parser_rejects_conflicting_plain_text():
+    from contracts.deliverable_escrow import parse_verdict_response
+
+    raw = (
+        "The validator considered APPROVED and REJECTED outcomes, "
+        "but did not state a final decision."
+    )
+    verdict, reasoning = parse_verdict_response(raw)
+
+    assert verdict == "NEEDS_REVISION"
+    assert "unambiguous" in reasoning.lower()
+
+
+def test_verdict_parser_accepts_json_with_verdict_words_in_reasoning():
+    from contracts.deliverable_escrow import parse_verdict_response
+
+    raw = json.dumps({
+        "verdict": "REJECTED",
+        "reasoning": "The work is rejected; it would be approved after the missing section is supplied.",
+    })
+    verdict, reasoning = parse_verdict_response(raw)
+
+    assert verdict == "REJECTED"
+    assert "approved after" in reasoning.lower()
