@@ -118,6 +118,17 @@ v0.3.2: verdict parsing now tries a JSON parse first (the model
         reasoning string with no stray braces/quotes/escapes leaking
         into on-chain data), falling back to the existing keyword-scan
         + line-split parsing for the plain-text shape.
+v0.3.3: fixed a fallback-parser bug where the keyword scan used an
+        elif chain (NEEDS_REVISION, then APPROVED, then REJECTED), so
+        mixed verdict text containing more than one keyword — e.g.
+        "not APPROVED; the work is REJECTED because..." — was always
+        misread as APPROVED regardless of which verdict the validator
+        actually reached. The fallback now (1) trusts the first
+        non-empty line only when it is a single, unambiguous verdict
+        word, and (2) otherwise requires exactly one verdict keyword to
+        appear anywhere in the response; any response naming more than
+        one is treated as ambiguous and resolved to NEEDS_REVISION
+        (the safe, non-paying outcome) instead of silently approving.
 v0.3.3: gl.nondet.web.render() returns the raw text of the entire
         fetched page — nav bars, menus, "sign in" links, sidebars,
         related-post lists, footers — mixed in with the actual article,
@@ -160,6 +171,121 @@ BPS_DENOMINATOR = 10000
 MAX_TEXT_LEN = 10000         # cap on brief/criteria/submission length
                               # (storage-abuse guard; generous for real use)
 MAX_DISPUTE_REASON_LEN = 2000
+
+VALID_VERDICTS = ("APPROVED", "REJECTED", "NEEDS_REVISION")
+
+
+def parse_verdict_response(raw: str) -> tuple[str, str]:
+    """Pure parsing of a raw validator response into (verdict, reasoning).
+
+    Deliberately touches no gl.* / contract state, and depends only on
+    `json`/`re` from the standard library, so it can be imported and
+    unit-tested directly and offline (see tests/test_verdict_parser.py)
+    without deploying to a live GenLayer network — kept in this file
+    (rather than a separate module) since GenLayer intelligent contracts
+    are deployed as a single self-contained source file.
+
+    Tries a JSON shape first ({"verdict": ..., "reasoning": ...}), then
+    falls back to keyword scanning of plain text. The fallback trusts the
+    first non-empty line only when it is a single, unambiguous verdict
+    word; otherwise it requires exactly one of the three verdict keywords
+    to appear anywhere in the response. Text that mixes more than one
+    verdict keyword (e.g. "not APPROVED; the work is REJECTED because...")
+    is genuinely ambiguous and resolves to NEEDS_REVISION — the safe,
+    non-paying outcome — rather than being silently misread as APPROVED.
+    """
+    verdict = None
+    reasoning = None
+
+    stripped_raw = raw.strip()
+    json_candidate = stripped_raw
+    # Handle the model wrapping JSON in a ```json ... ``` fence.
+    if json_candidate.startswith("```"):
+        json_candidate = json_candidate.strip("`")
+        if json_candidate.lower().startswith("json"):
+            json_candidate = json_candidate[4:]
+        json_candidate = json_candidate.strip()
+
+    if json_candidate.startswith("{"):
+        try:
+            parsed = json.loads(json_candidate)
+            v = str(parsed.get("verdict", "")).strip().upper().replace(" ", "_")
+            if v in VALID_VERDICTS:
+                verdict = v
+            r = parsed.get("reasoning", "")
+            if isinstance(r, str) and r.strip():
+                reasoning = r.strip()
+        except (ValueError, AttributeError):
+            pass  # not valid JSON — fall through to keyword scanning
+
+    if verdict is None:
+        # Keyword-based extraction: scan for the verdict keyword instead
+        # of depending on an exact machine-readable shape.
+        #
+        # The prompt asks for "Line 1: one word — APPROVED, REJECTED, or
+        # NEEDS_REVISION", so the first non-empty line is the
+        # authoritative signal. Try that first, matched as a whole word
+        # so a line like "APPROVED." or "Verdict: APPROVED" still
+        # resolves cleanly.
+        first_line = ""
+        for line in stripped_raw.splitlines():
+            if line.strip():
+                first_line = line.strip().upper()
+                break
+
+        def _line_verdict(text: str) -> str | None:
+            words = re.split(r"[^A-Z_]+", text)
+            found = [w for w in words if w in VALID_VERDICTS]
+            if len(set(found)) == 1:
+                return found[0]
+            return None
+
+        verdict = _line_verdict(first_line)
+
+        if verdict is None:
+            # First line wasn't a clean single verdict word — fall back to
+            # scanning the whole response, but only trust it when exactly
+            # one of the three verdict keywords appears anywhere. Prose
+            # that mentions more than one keyword is genuinely ambiguous —
+            # silently preferring APPROVED via an elif chain would let
+            # mixed/adversarial validator text release funds it never
+            # actually approved.
+            upper = stripped_raw.upper()
+            present = {
+                kw
+                for kw in ("NEEDS_REVISION", "APPROVED", "REJECTED")
+                if re.search(r"(?<![A-Z_])" + kw + r"(?![A-Z_])", upper)
+                or (kw == "NEEDS_REVISION" and "NEEDS REVISION" in upper)
+            }
+            if len(present) == 1:
+                verdict = next(iter(present))
+            else:
+                verdict = "NEEDS_REVISION"
+
+    if reasoning is None:
+        # Reasoning: everything after the first line (the verdict word),
+        # falling back to the full raw response if there's no second line.
+        lines = stripped_raw.splitlines()
+        if len(lines) > 1:
+            reasoning = " ".join(line.strip() for line in lines[1:] if line.strip())
+        else:
+            reasoning = stripped_raw
+    if not reasoning:
+        reasoning = "No reasoning text returned by validator."
+    # If the model only ever returned the bare verdict word (no actual
+    # explanation sentence), surface that plainly instead of silently
+    # repeating "APPROVED"/"REJECTED" as if it were a reason — that would
+    # look like a reason was given when none actually was.
+    if reasoning.strip().upper().replace(" ", "_") in VALID_VERDICTS:
+        reasoning = (
+            "Validator did not return an explanation for this verdict "
+            "(only the verdict word was returned)."
+        )
+
+    if verdict not in VALID_VERDICTS:
+        verdict = "NEEDS_REVISION"
+
+    return verdict, reasoning[:500]
 
 
 @allow_storage
@@ -546,73 +672,14 @@ class DeliverableEscrow(gl.Contract):
         # shape despite the prompt asking for two plain lines — it
         # sometimes returns a JSON object like
         #   {"verdict": "REJECTED", "reasoning": "..."}
-        # instead. Try a JSON parse first (cleanest, gives an exact
-        # reasoning string with no stray braces/quotes); fall back to
-        # keyword-scanning + line-splitting for the plain-text shape.
-        verdict = None
-        reasoning = None
+        # instead, and sometimes returns prose that mentions more than one
+        # verdict keyword. All of that shape-guessing lives in the pure,
+        # module-level parse_verdict_response() helper above (unit-tested
+        # directly and offline in tests/test_verdict_parser.py) so this
+        # method only has to call it and apply the result.
+        verdict, reasoning = parse_verdict_response(raw)
 
-        stripped_raw = raw.strip()
-        json_candidate = stripped_raw
-        # Handle the model wrapping JSON in a ```json ... ``` fence.
-        if json_candidate.startswith("```"):
-            json_candidate = json_candidate.strip("`")
-            if json_candidate.lower().startswith("json"):
-                json_candidate = json_candidate[4:]
-            json_candidate = json_candidate.strip()
-
-        if json_candidate.startswith("{"):
-            try:
-                parsed = json.loads(json_candidate)
-                v = str(parsed.get("verdict", "")).strip().upper().replace(" ", "_")
-                if v in ("APPROVED", "REJECTED", "NEEDS_REVISION"):
-                    verdict = v
-                r = parsed.get("reasoning", "")
-                if isinstance(r, str) and r.strip():
-                    reasoning = r.strip()
-            except (ValueError, AttributeError):
-                pass  # not valid JSON — fall through to keyword scanning
-
-        if verdict is None:
-            # Keyword-based extraction: scan for the verdict keyword instead
-            # of depending on an exact machine-readable shape.
-            upper = stripped_raw.upper()
-            if "NEEDS_REVISION" in upper or "NEEDS REVISION" in upper:
-                verdict = "NEEDS_REVISION"
-            elif "APPROVED" in upper:
-                verdict = "APPROVED"
-            elif "REJECTED" in upper:
-                verdict = "REJECTED"
-            else:
-                verdict = "NEEDS_REVISION"
-
-        if reasoning is None:
-            # Reasoning: everything after the first line (the verdict
-            # word), falling back to the full raw response if there's no
-            # second line.
-            lines = stripped_raw.splitlines()
-            if len(lines) > 1:
-                reasoning = " ".join(line.strip() for line in lines[1:] if line.strip())
-            else:
-                reasoning = stripped_raw
-        if not reasoning:
-            reasoning = "No reasoning text returned by validator."
-        # If the model only ever returned the bare verdict word (no actual
-        # explanation sentence), surface that plainly instead of silently
-        # repeating "APPROVED"/"REJECTED" as if it were a reason — that
-        # would look like a reason was given when none actually was.
-        if reasoning.strip().upper().replace(" ", "_") in (
-            "APPROVED", "REJECTED", "NEEDS_REVISION"
-        ):
-            reasoning = (
-                "Validator did not return an explanation for this verdict "
-                "(only the verdict word was returned)."
-            )
-
-        if verdict not in ("APPROVED", "REJECTED", "NEEDS_REVISION"):
-            verdict = "NEEDS_REVISION"
-
-        e.verdict_reasoning = reasoning[:500]
+        e.verdict_reasoning = reasoning
         if verdict == "APPROVED":
             e.status = u256(STATUS_APPROVED)
         else:
