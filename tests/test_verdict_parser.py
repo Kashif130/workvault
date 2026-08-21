@@ -123,6 +123,31 @@ def test_mixed_verdict_text_rejection_framed_as_not_approved():
     assert verdict == "NEEDS_REVISION"
 
 
+def test_negated_verdict_fails_closed():
+    # The exact minimal case a later review round flagged directly: a
+    # keyword-presence check (including the "exactly one keyword present"
+    # variant this parser used to use as its whole-response fallback)
+    # reads "not APPROVED" as an assertion of APPROVED, because the word
+    # "APPROVED" is genuinely present as a whole word. No negation-word
+    # blacklist reliably closes this off in natural language, so the
+    # parser now never infers a verdict from prose at all — only an exact
+    # canonical token (JSON verdict field, or a first line that IS the
+    # token) is ever trusted. This single sentence, with nothing else in
+    # the response, must resolve to the safe non-paying outcome.
+    raw = "This submission is not APPROVED."
+    verdict, _ = parse_verdict_response(raw)
+    assert verdict != "APPROVED"
+    assert verdict == "NEEDS_REVISION"
+
+    # The same negation shape for the other verdict word that actually
+    # matters for fund safety in the other direction — a good submission
+    # silently read as rejected would discard an approval that was never
+    # actually withheld.
+    verdict_2, _ = parse_verdict_response("This work is not REJECTED outright.")
+    assert verdict_2 != "REJECTED"
+    assert verdict_2 == "NEEDS_REVISION"
+
+
 def test_mixed_verdict_text_quotes_the_criteria():
     # Reasoning that quotes the acceptance criteria back (which itself
     # says "Approve if...") can introduce the word APPROVED even in a
@@ -178,7 +203,22 @@ def test_garbage_response_defaults_to_needs_revision():
 
 def test_verdict_word_with_trailing_punctuation_on_first_line():
     verdict, reasoning = parse_verdict_response(
-        "Verdict: APPROVED.\nThe article covers all required points clearly."
+        "APPROVED.\nThe article covers all required points clearly."
     )
     assert verdict == "APPROVED"
     assert "required points" in reasoning
+
+
+def test_labeled_prefix_line_fails_closed_not_leniently_parsed():
+    # Under the strict-canonical-only policy, a first line has to BE the
+    # verdict token (plus only light surrounding punctuation/markdown) —
+    # a human-style label prefix like "Verdict: APPROVED." is
+    # deliberately NOT unwrapped, even though it's unambiguous to a
+    # person reading it. Any prefix-stripping heuristic reopens exactly
+    # the kind of natural-language leniency that let a negated sentence
+    # ("not APPROVED") get misread in the first place, so this parser
+    # accepts nothing between the start of the line and the bare token.
+    verdict, _ = parse_verdict_response(
+        "Verdict: APPROVED.\nThe article covers all required points clearly."
+    )
+    assert verdict == "NEEDS_REVISION"
