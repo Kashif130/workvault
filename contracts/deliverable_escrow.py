@@ -186,13 +186,29 @@ def parse_verdict_response(raw: str) -> tuple[str, str]:
     are deployed as a single self-contained source file.
 
     Tries a JSON shape first ({"verdict": ..., "reasoning": ...}), then
-    falls back to keyword scanning of plain text. The fallback trusts the
-    first non-empty line only when it is a single, unambiguous verdict
-    word; otherwise it requires exactly one of the three verdict keywords
-    to appear anywhere in the response. Text that mixes more than one
-    verdict keyword (e.g. "not APPROVED; the work is REJECTED because...")
-    is genuinely ambiguous and resolves to NEEDS_REVISION — the safe,
-    non-paying outcome — rather than being silently misread as APPROVED.
+    falls back to strict canonical-token parsing: the first non-empty
+    line must be, after stripping only surrounding punctuation/markdown,
+    EXACTLY one of "APPROVED", "REJECTED", or "NEEDS_REVISION" — nothing
+    else is accepted.
+
+    There is deliberately no whole-response keyword scan and no
+    substring/whole-word search anywhere in this function. An earlier
+    version of this parser did scan prose for a verdict keyword, and it
+    was unsafe: a response like "This submission is not APPROVED." (or
+    "...is not REJECTED", "cannot be APPROVED", etc.) contains the
+    keyword "APPROVED" as a genuine whole word, so any keyword-presence
+    check — including a "does exactly one keyword appear" check — reads
+    a negated denial as an assertion and can unlock a withdrawal the
+    validator never actually approved. Negation can appear anywhere
+    before, after, or split across a keyword in natural language, so no
+    amount of extra negation-word blacklisting closes this off reliably;
+    the only fully safe fix is to never infer a verdict from prose at
+    all. Any response that isn't valid JSON with a canonical verdict
+    field, and whose first line isn't an exact canonical token, is
+    therefore treated as unparseable and resolves to NEEDS_REVISION —
+    the safe, non-paying outcome — rather than guessed from surrounding
+    text. See test_verdict_parser.py::test_negated_verdict_fails_closed
+    for the exact case this closes.
     """
     verdict = None
     reasoning = None
@@ -216,51 +232,34 @@ def parse_verdict_response(raw: str) -> tuple[str, str]:
             if isinstance(r, str) and r.strip():
                 reasoning = r.strip()
         except (ValueError, AttributeError):
-            pass  # not valid JSON — fall through to keyword scanning
+            pass  # not valid JSON — fall through to strict line parsing
 
     if verdict is None:
-        # Keyword-based extraction: scan for the verdict keyword instead
-        # of depending on an exact machine-readable shape.
-        #
-        # The prompt asks for "Line 1: one word — APPROVED, REJECTED, or
-        # NEEDS_REVISION", so the first non-empty line is the
-        # authoritative signal. Try that first, matched as a whole word
-        # so a line like "APPROVED." or "Verdict: APPROVED" still
-        # resolves cleanly.
+        # Strict canonical parsing only. The prompt asks for "Line 1: one
+        # word — APPROVED, REJECTED, or NEEDS_REVISION", so the first
+        # non-empty line is the only signal trusted, and only when it is
+        # an exact canonical token after stripping light surrounding
+        # punctuation/markdown (e.g. "APPROVED." or "**APPROVED**" still
+        # resolve cleanly). A first line like "Verdict: APPROVED" or any
+        # full sentence does NOT resolve — that is intentional: accepting
+        # prefixed or sentence-form lines would reopen the same class of
+        # ambiguity this function exists to close, since a negated
+        # sentence ("This is not APPROVED") is indistinguishable in shape
+        # from an assertive one ("The verdict is APPROVED") without
+        # natural-language understanding this parser deliberately does
+        # not attempt.
         first_line = ""
         for line in stripped_raw.splitlines():
             if line.strip():
-                first_line = line.strip().upper()
+                first_line = line.strip()
                 break
 
-        def _line_verdict(text: str) -> str | None:
-            words = re.split(r"[^A-Z_]+", text)
-            found = [w for w in words if w in VALID_VERDICTS]
-            if len(set(found)) == 1:
-                return found[0]
-            return None
-
-        verdict = _line_verdict(first_line)
-
-        if verdict is None:
-            # First line wasn't a clean single verdict word — fall back to
-            # scanning the whole response, but only trust it when exactly
-            # one of the three verdict keywords appears anywhere. Prose
-            # that mentions more than one keyword is genuinely ambiguous —
-            # silently preferring APPROVED via an elif chain would let
-            # mixed/adversarial validator text release funds it never
-            # actually approved.
-            upper = stripped_raw.upper()
-            present = {
-                kw
-                for kw in ("NEEDS_REVISION", "APPROVED", "REJECTED")
-                if re.search(r"(?<![A-Z_])" + kw + r"(?![A-Z_])", upper)
-                or (kw == "NEEDS_REVISION" and "NEEDS REVISION" in upper)
-            }
-            if len(present) == 1:
-                verdict = next(iter(present))
-            else:
-                verdict = "NEEDS_REVISION"
+        candidate = first_line.upper().strip(" .*:-_`\"'()[]{}")
+        candidate = candidate.replace(" ", "_")
+        if candidate in VALID_VERDICTS:
+            verdict = candidate
+        # else: verdict stays None and resolves to NEEDS_REVISION below —
+        # deliberately no further fallback.
 
     if reasoning is None:
         # Reasoning: everything after the first line (the verdict word),
